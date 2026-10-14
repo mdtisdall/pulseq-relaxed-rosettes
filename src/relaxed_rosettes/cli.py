@@ -3,21 +3,42 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+
+import pypulseq as pp
 
 from relaxed_rosettes import __version__
+from relaxed_rosettes.checks import (
+    acquired_time_range,
+    format_report,
+    gradient_report,
+    pns_report,
+    spectrum_report,
+    timing_report,
+)
 from relaxed_rosettes.config import Config, ConfigError
 from relaxed_rosettes.optimize import (
+    Shape,
     ShapeOptimizationError,
     load_shapes,
     optimize_shapes,
     save_shapes,
     shape_metrics,
 )
-from relaxed_rosettes.sequence import build_sequence, make_schedule, save_schedule
+from relaxed_rosettes.sequence import (
+    Schedule,
+    build_sequence,
+    load_design,
+    make_schedule,
+    save_design,
+)
+from relaxed_rosettes.system import make_opts
 from relaxed_rosettes.targets import make_targets, save_targets
+from relaxed_rosettes.trajectory import make_trajectory, save_trajectory, verify_trajectory
 
 
 def _load_config(args: argparse.Namespace) -> Config:
@@ -89,11 +110,78 @@ def _cmd_sequence(args: argparse.Namespace) -> int:
     seq = build_sequence(config, shapes, schedule)
     output: Path = args.output
     seq.write(str(output))
-    schedule_path = output.with_suffix(".npz")
-    save_schedule(schedule_path, config, schedule)
+    design_path = output.with_suffix(".npz")
+    save_design(design_path, config, schedule, shapes)
     print(
         f"wrote {output}: {schedule.num_trs} TRs ({config.scan.num_dummy_trs} dummy), "
-        f"{seq.duration()[0]:.1f} s; schedule in {schedule_path} (config {config.digest()})"
+        f"{seq.duration()[0]:.1f} s; design in {design_path} (config {config.digest()})"
+    )
+    return 0
+
+
+def _load_seq_and_design(
+    seq_path: Path,
+) -> tuple[pp.Sequence, Config, Schedule, list[Shape]]:
+    config, schedule, shapes = load_design(seq_path.with_suffix(".npz"))
+    seq = pp.Sequence(system=make_opts(config))
+    seq.read(str(seq_path))
+    digest = seq.get_definition("ConfigDigest")
+    if digest != config.digest():
+        raise ValueError(
+            f"{seq_path} has config digest {digest!r}, but its design file has {config.digest()!r}"
+        )
+    return seq, config, schedule, shapes
+
+
+def _parse_band(text: str) -> tuple[float, float]:
+    low, sep, high = text.partition(":")
+    try:
+        band = (float(low), float(high))
+    except ValueError:
+        band = (0.0, -1.0)
+    if not sep or not 0 <= band[0] < band[1]:
+        raise argparse.ArgumentTypeError(f"band {text!r} is not LOW:HIGH in Hz")
+    return band
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    seq, config, schedule, shapes = _load_seq_and_design(args.seq)
+    time_range = acquired_time_range(config, args.trs)
+    report: dict[str, Any] = {
+        "config_digest": config.digest(),
+        "timing": timing_report(seq),
+        "gradients": gradient_report(config, schedule, shapes),
+        "spectrum": spectrum_report(seq, args.band, time_range),
+    }
+    if args.asc:
+        report["pns"] = pns_report(seq, args.asc, time_range)
+    print(json.dumps(report, indent=2) if args.json else format_report(report))
+    failed = not report["timing"]["ok"] or not report["gradients"]["nyquist_ok"]
+    failed |= "pns" in report and not report["pns"]["ok"]
+    return 1 if failed else 0
+
+
+def _cmd_export_trajectory(args: argparse.Namespace) -> int:
+    seq, config, schedule, shapes = _load_seq_and_design(args.seq)
+    trajectory = make_trajectory(config, schedule, shapes)
+    # The .seq file stores waveforms and rotations as rounded text, so the
+    # scanner's k-space differs slightly from the design's; allow 1e-3 of a
+    # k-space pixel (1 / FOV).
+    pixel = 1.0 / config.geometry.fov_m
+    error = verify_trajectory(seq, trajectory, args.verify_trs) / pixel
+    if error > 1e-3:
+        print(
+            f"error: the trajectory differs from pypulseq's k-space by {error:.3g} "
+            "k-space pixels (1/FOV)",
+            file=sys.stderr,
+        )
+        return 1
+    save_trajectory(args.output, config, trajectory)
+    print(
+        f"wrote {args.output}: {len(trajectory.tr_index)} TRs x "
+        f"{len(trajectory.adc_time_in_tr_s)} samples; matches pypulseq's k-space of "
+        f"{args.seq} within {error:.1e} k-space pixels over "
+        f"{min(args.verify_trs, len(trajectory.tr_index))} TRs"
     )
     return 0
 
@@ -137,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sequence = commands.add_parser(
         "sequence",
-        help="build the .seq file from optimized shapes, and its TR schedule (.npz)",
+        help="build the .seq file from optimized shapes, and its design file (.npz)",
     )
     sequence.add_argument("shapes", type=Path, help=".npz file from `relaxed-rosettes shapes`")
     sequence.add_argument(
@@ -145,9 +233,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         required=True,
-        help="output .seq file; the schedule goes next to it, with the suffix .npz",
+        help="output .seq file; the design file goes next to it, with the suffix .npz",
     )
     sequence.set_defaults(func=_cmd_sequence)
+
+    check = commands.add_parser(
+        "check", help="check a .seq file: timing, gradients, Nyquist, spectrum, PNS"
+    )
+    check.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
+    check.add_argument(
+        "--asc", type=Path, help="Siemens gradient hardware .asc file, for the PNS check"
+    )
+    check.add_argument(
+        "--band",
+        type=_parse_band,
+        action="append",
+        default=[],
+        metavar="LOW:HIGH",
+        help="frequency band (Hz) to report the gradient spectrum in (repeatable)",
+    )
+    check.add_argument(
+        "--trs",
+        type=int,
+        default=100,
+        help="acquired TRs for the PNS and spectrum checks (default: 100)",
+    )
+    check.add_argument("--json", action="store_true", help="print the report as JSON")
+    check.set_defaults(func=_cmd_check)
+
+    export = commands.add_parser(
+        "export-traj", help="export the k-space trajectory at the ADC samples (.npz)"
+    )
+    export.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
+    export.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
+    export.add_argument(
+        "--verify-trs",
+        type=int,
+        default=2,
+        help="acquired TRs to check against pypulseq's k-space (default: 2)",
+    )
+    export.set_defaults(func=_cmd_export_trajectory)
 
     return parser
 
