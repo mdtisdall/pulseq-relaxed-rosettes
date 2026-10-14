@@ -78,6 +78,16 @@ It prints two tables (window length × resolution, median and worst over start t
 
 It also reports the sampling of the (|k|, time since excitation) plane over the whole scan: the fraction of (|k| shell × τ bin) cells with no sample (overall, early in the readout, and in the outer half of k-space) and the longest τ gap in any shell. Rotations do not change |k|(t), so only the shapes sample this plane; more shapes (`shapes.num_shapes`), not more TRs, fill it in.
 
+## Tip-radius density
+
+Where the petal tips are, in radius, decides how samples spread over k-space. `shapes.tip_density` chooses how the radii are distributed:
+
+- `power` (default): radii `u ** tip_radius_power`, `u` blue noise.
+- `exponent`: derived so that a window of scan time covers the k-space ball of resolution `res` in a time proportional to `res ** -resolution_time_exponent` (2 to below 3), over the resolutions from `density_resolution_min_m` to `density_resolution_max_m`.
+- `filter`: derived to minimize the noise of Hann-filtered reconstructions at log-spaced resolutions in the same range, weighted `res ** filter_prior_power` per octave.
+
+The derived models calibrate the trajectory speed on a few shapes (`calibration_shapes`, `calibration_iterations`). [docs/sampling-density.md](docs/sampling-density.md) derives both models and compares the designs.
+
 ## Dependencies
 
 PyPulseq is pinned to a commit of the [mcencini fork](https://github.com/mcencini/pypulseq) (`experimental` branch), because it has the rotation extension (`pp.make_rotation`) and the official release does not yet ([pulseq/pypulseq#372](https://github.com/pulseq/pypulseq/pull/372)).
