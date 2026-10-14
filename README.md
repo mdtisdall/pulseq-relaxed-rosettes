@@ -11,6 +11,8 @@ nix develop
 uv sync
 ```
 
+The reconstruction commands need the `recon` extra: `uv sync --extra recon` (or `--all-extras`).
+
 ## Usage
 
 Every design parameter is in one TOML config file, including the random seed. Write the defaults to a file, edit it, then check it:
@@ -77,6 +79,16 @@ uv run relaxed-rosettes coverage relaxed_rosettes.seq --windows 0.5,2,10,30 --re
 It prints two tables (window length × resolution, median and worst over start times): the *coverage*, the fraction of k-space cells (spacing 1/FOV) inside the resolution's k-space ball that hold a sample; and the *gap*, the 95th percentile distance from that ball to the nearest sample, in cells, which shows how far a reconstruction must fill in between samples. `--tau-bins N` reports the worst of N bins of time since excitation; `--json` prints the arrays.
 
 It also reports the sampling of the (|k|, time since excitation) plane over the whole scan: the fraction of (|k| shell × τ bin) cells with no sample (overall, early in the readout, and in the outer half of k-space) and the longest τ gap in any shell. Rotations do not change |k|(t), so only the shapes sample this plane; more shapes (`shapes.num_shapes`), not more TRs, fill it in.
+
+Convert the scanner's raw data to ISMRMRD, the input of the reconstruction (needs the `recon` extra):
+
+```
+uv run relaxed-rosettes to-ismrmrd meas_MID00042_relaxed_rosettes.dat relaxed_rosettes.seq -o raw.h5
+```
+
+It reads the Siemens `meas.dat` file with twixtools and checks that its header has the MD5 signature of the `.seq` file, so raw data cannot be paired with the wrong design (`--no-signature-check` converts anyway, with a warning). It writes one acquisition for each acquired TR, in order, with the ADC segments (the interpreter splits an ADC longer than `system.adc_samples_limit` samples) joined, and one for each noise scan (`ACQ_IS_NOISE_MEASUREMENT`). In a TR acquisition, `scan_counter` is the acquired TR number, `user_int[0]` its index in the full schedule and `user_int[1]` its shape; `traj` is the k-space position in cycles per FOV on the physical gradient axes (`--no-trajectory` leaves it out). The header has the design config, its digest, and the `.seq` signature as user parameters. No patient information is copied. A scan with fewer TRs than the design (e.g. stopped early) needs `--allow-partial`. The interpreter applies the ADC phase offset, so the data are already demodulated by the RF phase of each TR.
+
+`relaxed_rosettes.recon.rawdata.load_rawdata(path)` reads the file: the noise samples, the TR index, shape, and time stamp of each TR, and the data of any TRs on demand (`read`). `check_trajectory(config, trajectory)` fails unless the raw data and a trajectory file come from the same design.
 
 ## Dependencies
 
