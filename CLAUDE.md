@@ -1,14 +1,28 @@
 # pulseq-relaxed-rosettes
 
 A relaxed rosette k-space trajectory MRI pulse sequence, written in Python
-with [PyPulseq](https://github.com/imr-framework/pypulseq). The package is in
+with [PyPulseq](https://github.com/pulseq/pypulseq). The package is in
 `src/relaxed_rosettes/`, and the tests are in `tests/`.
 
 - Toolchain: the nix devShell (`flake.nix`) supplies Python 3.12, uv, and gh.
   uv manages the virtual environment and dependencies (`pyproject.toml`,
   `uv.lock`). Add a dependency with `uv add <package>`, or
   `uv add --group dev <package>` for a development tool.
-- Lint and format: ruff. Type check: mypy (strict). Tests: pytest.
+- Lint and format: ruff. Type check: mypy (strict). Tests: pytest. Warnings
+  are errors in tests.
+- pypulseq is pinned (`[tool.uv.sources]` in `pyproject.toml`) to commit
+  `c45b696` of the mcencini fork's `experimental` branch, for the rotation
+  extension (`pp.make_rotation`). No branch of `pulseq/pypulseq` has it; the
+  upstream PR is pulseq/pypulseq#372 (draft; its head, `feat-rotext`, does not
+  import without `rotate3D` from #302). Move to an official release once the
+  extension is merged there.
+- Every design parameter is in `relaxed_rosettes.config.Config` (TOML, SI
+  units, unit in the field name). Outputs are reproducible from the config,
+  which includes the seed. Use `np.random.Generator` seeded from the config,
+  not global `np.random`.
+- CLI: `relaxed-rosettes` (`src/relaxed_rosettes/cli.py`). No custom
+  plotting in this package: outputs are `.seq` and `.npz` files for other
+  tools.
 
 ## Branch and PR workflow
 

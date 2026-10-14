@@ -1,0 +1,85 @@
+"""Command-line interface: ``relaxed-rosettes <command>``."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from relaxed_rosettes import __version__
+from relaxed_rosettes.config import Config, ConfigError
+
+
+def _load_config(args: argparse.Namespace) -> Config:
+    config = Config.load(args.config) if args.config else Config()
+    return config.with_overrides(args.set)
+
+
+def _add_config_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "config", nargs="?", type=Path, help="TOML config file (default: built-in defaults)"
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="override one config value (repeatable), e.g. --set readout.tr_s=0.025",
+    )
+
+
+def _cmd_config_init(args: argparse.Namespace) -> int:
+    path: Path = args.path
+    if path.exists() and not args.force:
+        print(f"error: {path} exists (use --force to overwrite)", file=sys.stderr)
+        return 1
+    path.write_text(Config().to_toml())
+    print(f"wrote {path}")
+    return 0
+
+
+def _cmd_config_show(args: argparse.Namespace) -> int:
+    config = _load_config(args)
+    print(f"# config digest: {config.digest()}")
+    print(config.to_toml(), end="")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="relaxed-rosettes",
+        description="Design and build the relaxed rosette pulse sequence.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    config = commands.add_parser("config", help="write or show a design config")
+    config_commands = config.add_subparsers(dest="config_command", required=True)
+
+    init = config_commands.add_parser("init", help="write a config file with the defaults")
+    init.add_argument("path", type=Path, help="TOML file to write")
+    init.add_argument("--force", action="store_true", help="overwrite an existing file")
+    init.set_defaults(func=_cmd_config_init)
+
+    show = config_commands.add_parser(
+        "show", help="validate a config and print it with all defaults filled in"
+    )
+    _add_config_args(show)
+    show.set_defaults(func=_cmd_config_show)
+
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        status: int = args.func(args)
+    except (ConfigError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

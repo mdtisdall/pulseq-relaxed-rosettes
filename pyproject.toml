@@ -4,7 +4,15 @@ version = "0.1.0"
 description = "A relaxed rosette k-space trajectory pulse sequence, written with PyPulseq"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pypulseq"]
+dependencies = [
+    "cvxpy>=1.9.3",
+    "numpy>=2.5.4",
+    "pypulseq",
+    "scipy>=1.18.1",
+]
+
+[project.scripts]
+relaxed-rosettes = "relaxed_rosettes.cli:main"
 
 [dependency-groups]
 dev = ["mypy", "pytest", "ruff"]
@@ -24,8 +32,17 @@ select = ["E", "F", "W", "I", "B", "UP", "NPY"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pypulseq", "pypulseq.*"]
+module = ["pypulseq", "pypulseq.*", "cvxpy", "cvxpy.*", "scipy", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    # pypulseq (mcencini fork) normalizes rotation quaternions with
+    # np.divide(..., where=...) and no out=; harmless for nonzero quaternions.
+    "ignore:'where' used without 'out':UserWarning",
+]
+
+[tool.uv.sources]
+pypulseq = { git = "https://github.com/mcencini/pypulseq", rev = "c45b696c170837b3c178563cb53b2f367bae6727" }
