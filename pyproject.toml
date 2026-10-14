@@ -32,8 +32,13 @@ select = ["E", "F", "W", "I", "B", "UP", "NPY"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pypulseq", "pypulseq.*", "cvxpy", "cvxpy.*", "scipy", "scipy.*"]
+module = ["pypulseq", "pypulseq.*", "scipy", "scipy.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# cvxpy's partial annotations do not describe its public API; treat it as untyped.
+module = ["cvxpy", "cvxpy.*"]
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
