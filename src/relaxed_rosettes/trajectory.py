@@ -9,6 +9,12 @@ shape index and rotation of each acquired TR. The k-space position of sample
 k is computed as the exact integral of the piecewise-linear gradient that
 pypulseq plays, with k = 0 at the RF center (the gradients are off during the
 RF pulse).
+
+For the concomitant (Maxwell) field, the export also has the time integral of
+the gradient outer product, ``gg(t) = ∫ g gᵀ dt`` (3 × 3, symmetric), of each
+shape at the ADC samples. The lowest-order concomitant field is quadratic in
+the gradient, so in a TR with rotation ``R`` its phase at every position
+follows from ``R @ gg @ Rᵀ`` (``concomitant_phase_rad``).
 """
 
 from __future__ import annotations
@@ -51,12 +57,74 @@ def kspace_at_times(g_mT_per_m: FloatArray, raster_s: float, t_s: FloatArray) ->
     return k
 
 
+def gradient_outer_integral_at_times(
+    g_mT_per_m: FloatArray, raster_s: float, t_s: FloatArray
+) -> FloatArray:
+    """(times, 3, 3) ``∫ g gᵀ dt`` (T² s / m²) of a shape from the start of its block.
+
+    The waveform is the piecewise-linear one of ``kspace_at_times``. Its
+    integral is exact (cubic within each interval).
+    """
+    n = len(g_mT_per_m)
+    t_points = np.concatenate([[0.0], (np.arange(n) + 0.5) * raster_s, [n * raster_s]])
+    g_points = np.concatenate([np.zeros((1, 3)), g_mT_per_m, np.zeros((1, 3))]) * 1e-3
+    dt = np.diff(t_points)
+    a, b = g_points[:-1], g_points[1:]
+    # ∫ over an interval of a line from a to b: dt (2 a aᵀ + a bᵀ + b aᵀ + 2 b bᵀ) / 6.
+    ab = np.einsum("ti,tj->tij", a, b)
+    pieces = (
+        2 * np.einsum("ti,tj->tij", a, a)
+        + ab
+        + ab.transpose(0, 2, 1)
+        + 2 * np.einsum("ti,tj->tij", b, b)
+    ) * (dt / 6)[:, None, None]
+    integral = np.concatenate([np.zeros((1, 3, 3)), np.cumsum(pieces, axis=0)])
+    if np.any(t_s < 0) or np.any(t_s > t_points[-1]):
+        raise ValueError("a time is outside the block")
+    j = np.clip(np.searchsorted(t_points, t_s, side="right") - 1, 0, len(dt) - 1)
+    tau = (t_s - t_points[j])[:, None, None]
+    g0 = g_points[j]
+    slope = (b - a)[j] / dt[j][:, None]
+    g0_slope = np.einsum("ti,tj->tij", g0, slope)
+    gg: FloatArray = (
+        integral[j]
+        + np.einsum("ti,tj->tij", g0, g0) * tau
+        + (g0_slope + g0_slope.transpose(0, 2, 1)) * tau**2 / 2
+        + np.einsum("ti,tj->tij", slope, slope) * tau**3 / 3
+    )
+    return gg
+
+
+def concomitant_phase_rad(config: Config, gg_T2s_per_m2: FloatArray, r_m: FloatArray) -> FloatArray:
+    """(..., positions) phase (rad) of the lowest-order concomitant field.
+
+    ``gg_T2s_per_m2`` (..., 3, 3) is ``∫ g gᵀ dt`` on the physical axes (z along
+    B0), and ``r_m`` (positions, 3) are physical positions from the isocenter.
+    The field is (Bernstein et al., MRM 39:300, 1998)
+    ``B_c = [Gz² (x² + y²) / 4 + (Gx² + Gy²) z² - Gx Gz x z - Gy Gz y z] / (2 B0)``.
+    The phase is ``2π γ ∫ B_c dt``, with the same sign as the encoding phase
+    ``2π k·r``. It does not depend on the gradient polarity.
+    """
+    q = gg_T2s_per_m2
+    x, y, z = r_m[:, 0], r_m[:, 1], r_m[:, 2]
+    field_integral = (
+        q[..., 2, 2, None] * (x**2 + y**2) / 4
+        + (q[..., 0, 0, None] + q[..., 1, 1, None]) * z**2
+        - q[..., 0, 2, None] * x * z
+        - q[..., 1, 2, None] * y * z
+    ) / (2 * config.system.B0_T)
+    phase: FloatArray = 2 * np.pi * GAMMA_HZ_PER_T * field_integral
+    return phase
+
+
 @dataclass(frozen=True)
 class Trajectory:
     """Compact k-space trajectory of the acquired TRs."""
 
     k_shape_per_m: FloatArray
     """(shapes, samples, 3): k of each shape at the ADC samples, logical axes."""
+    gg_shape_T2s_per_m2: FloatArray
+    """(shapes, samples, 3, 3): ∫ g gᵀ dt of each shape at the ADC samples, logical axes."""
     adc_time_in_tr_s: FloatArray
     """(samples,): ADC sample times from the start of the TR block."""
     time_since_excitation_s: FloatArray
@@ -83,6 +151,20 @@ class Trajectory:
         k: FloatArray = np.einsum("tij,tsj->tsi", self.rotation_matrix[selection], k_logical)
         return k
 
+    def gg_T2s_per_m2(self, trs: slice | NDArray[np.int64] | None = None) -> FloatArray:
+        """(TRs, samples, 3, 3) physical ``R @ gg @ Rᵀ`` of the acquired TRs (default: all).
+
+        The file stores one tensor per shape. This returns one per TR and
+        sample, because each TR has its own rotation. All 5000 TRs of the
+        default design are about 5 GB in float64; pass ``trs`` (a slice or
+        index array) to compute a subset, e.g. a batch of a reconstruction.
+        """
+        selection = slice(None) if trs is None else trs
+        gg_logical = self.gg_shape_T2s_per_m2[self.shape_index[selection]]
+        r = self.rotation_matrix[selection]
+        gg: FloatArray = np.einsum("tik,tskl,tjl->tsij", r, gg_logical, r)
+        return gg
+
 
 def make_trajectory(config: Config, schedule: Schedule, shapes: list[Shape]) -> Trajectory:
     """Trajectory of a design."""
@@ -94,9 +176,14 @@ def make_trajectory(config: Config, schedule: Schedule, shapes: list[Shape]) -> 
     k_shape = np.stack(
         [kspace_at_times(s.g_mT_per_m, config.system.grad_raster_time_s, adc_time) for s in shapes]
     )
+    raster = config.system.grad_raster_time_s
+    gg_shape = np.stack(
+        [gradient_outer_integral_at_times(s.g_mT_per_m, raster, adc_time) for s in shapes]
+    )
     acquired = np.flatnonzero(schedule.acquired)
     return Trajectory(
         k_shape_per_m=k_shape,
+        gg_shape_T2s_per_m2=gg_shape,
         adc_time_in_tr_s=adc_time,
         time_since_excitation_s=adc_time - config.rf_center_s,
         tr_index=acquired.astype(np.int64),
@@ -112,11 +199,14 @@ def save_trajectory(path: Path, config: Config, trajectory: Trajectory) -> None:
 
     The arrays are the ``Trajectory`` fields, plus ``config_toml`` and
     ``config_digest``. The physical k of sample ``s`` of acquired TR ``a`` is
-    ``rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]``.
+    ``rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]``, and its
+    physical ``∫ g gᵀ dt`` is ``R @ gg_shape_T2s_per_m2[shape_index[a], s] @ Rᵀ``
+    with ``R = rotation_matrix[a]``.
     """
     np.savez(
         path,
         k_shape_per_m=trajectory.k_shape_per_m,
+        gg_shape_T2s_per_m2=trajectory.gg_shape_T2s_per_m2,
         adc_time_in_tr_s=trajectory.adc_time_in_tr_s,
         time_since_excitation_s=trajectory.time_since_excitation_s,
         tr_index=trajectory.tr_index,
@@ -137,6 +227,7 @@ def load_trajectory(path: Path) -> tuple[Config, Trajectory]:
             raise ValueError(f"{path}: config digest does not match its config")
         trajectory = Trajectory(
             k_shape_per_m=data["k_shape_per_m"],
+            gg_shape_T2s_per_m2=data["gg_shape_T2s_per_m2"],
             adc_time_in_tr_s=data["adc_time_in_tr_s"],
             time_since_excitation_s=data["time_since_excitation_s"],
             tr_index=data["tr_index"],

@@ -66,6 +66,8 @@ uv run relaxed-rosettes export-traj relaxed_rosettes.seq -o traj.npz
 
 All acquired TRs sample the same times, and each plays one shape rotated, so the file is compact: `k_shape_per_m` (shapes × samples × 3, logical axes), `adc_time_in_tr_s` and `time_since_excitation_s` (samples), and for each acquired TR `tr_index`, `tr_start_s`, `shape_index`, `rotation_matrix`, and `rf_phase_rad`. The k-space position (1/m) of sample `s` in acquired TR `a` is `rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]`; `relaxed_rosettes.trajectory.load_trajectory(path)[1].k_per_m()` computes it for all (or some) TRs. Before writing, the export checks itself against pypulseq's k-space of the `.seq` file.
 
+For the concomitant (Maxwell) field, the file also has `gg_shape_T2s_per_m2` (shapes × samples × 3 × 3, logical axes): `∫ g gᵀ dt` from the start of the TR, in T² s/m². The lowest-order concomitant field is quadratic in the gradient, so the physical tensor of acquired TR `a` is `R @ gg_shape_T2s_per_m2[shape_index[a], s] @ R.T` with `R = rotation_matrix[a]` (`Trajectory.gg_T2s_per_m2()`), and `relaxed_rosettes.trajectory.concomitant_phase_rad(config, gg, r_m)` gives its phase at physical positions (z along B0, from the isocenter; same sign as the encoding phase `2π k·r`). The phase is a second-order polynomial in position, for a reconstruction with an expanded encoding model. It comes from the nominal gradients: eddy currents and the gradient system response are not included.
+
 Measure the resolution–time trade-off: for windows of scan time of several lengths, at several start times, how much of k-space each resolution needs is sampled:
 
 ```
