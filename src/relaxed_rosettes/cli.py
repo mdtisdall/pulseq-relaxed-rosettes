@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pypulseq as pp
 
 from relaxed_rosettes import __version__
@@ -21,6 +22,7 @@ from relaxed_rosettes.checks import (
     timing_report,
 )
 from relaxed_rosettes.config import Config, ConfigError
+from relaxed_rosettes.coverage import format_metrics, window_metrics
 from relaxed_rosettes.optimize import (
     Shape,
     ShapeOptimizationError,
@@ -186,6 +188,44 @@ def _cmd_export_trajectory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_floats(text: str) -> list[float]:
+    try:
+        values = [float(v) for v in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a comma-separated list") from None
+    if not values or min(values) <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r}: values must be > 0")
+    return values
+
+
+def _cmd_coverage(args: argparse.Namespace) -> int:
+    _, config, schedule, shapes = _load_seq_and_design(args.seq)
+    trajectory = make_trajectory(config, schedule, shapes)
+    resolutions = np.array(sorted(args.resolutions_mm, reverse=True)) * 1e-3
+    metrics = window_metrics(
+        config,
+        trajectory,
+        sorted(args.windows),
+        resolutions,
+        num_starts=args.starts,
+        tau_bins=args.tau_bins,
+    )
+    if args.json:
+        report = {
+            "config_digest": config.digest(),
+            "windows_s": metrics.windows_s,
+            "resolutions_m": metrics.resolutions_m.tolist(),
+            "tau_bins": metrics.tau_bins,
+            "coverage": metrics.coverage.tolist(),
+            "gap_percentile": metrics.gap_percentile,
+            "gap_cells": metrics.gap_cells.tolist(),
+        }
+        print(json.dumps(report, indent=2))
+    else:
+        print(format_metrics(metrics))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="relaxed-rosettes",
@@ -273,6 +313,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="acquired TRs to check against pypulseq's k-space (default: 2)",
     )
     export.set_defaults(func=_cmd_export_trajectory)
+
+    coverage = commands.add_parser(
+        "coverage",
+        help="k-space coverage and gaps of windows of scan time, by resolution",
+    )
+    coverage.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
+    coverage.add_argument(
+        "--windows",
+        type=_parse_floats,
+        default=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0],
+        metavar="S,S,...",
+        help="window lengths in seconds (default: 0.1,0.2,0.5,1,2,5,10,30)",
+    )
+    coverage.add_argument(
+        "--resolutions-mm",
+        type=_parse_floats,
+        default=[8.0, 6.0, 4.0, 3.0, 2.0, 1.5, 1.0],
+        metavar="MM,MM,...",
+        help="resolutions in mm (default: 8,6,4,3,2,1.5,1)",
+    )
+    coverage.add_argument(
+        "--starts", type=int, default=8, help="window start times to sample (default: 8)"
+    )
+    coverage.add_argument(
+        "--tau-bins",
+        type=int,
+        default=1,
+        help="report the worst of this many bins of time since excitation (default: 1)",
+    )
+    coverage.add_argument("--json", action="store_true", help="print the metrics as JSON")
+    coverage.set_defaults(func=_cmd_coverage)
 
     return parser
 
