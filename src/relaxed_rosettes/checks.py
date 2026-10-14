@@ -4,14 +4,16 @@
   vector, over every TR (exact, from the design file).
 - Nyquist along the path: the longest ADC dwell that the peak gradient allows.
 - pypulseq timing check of the ``.seq`` file.
-- PNS (pypulseq's SAFE model) with a Siemens ``.asc`` hardware file, and the
-  gradient spectrum in given frequency bands (e.g. the scanner's acoustic
-  resonances). These two run over a window of acquired TRs, because they
-  sample the waveforms of the whole window.
+- PNS (the SAFE model) over every TR, with a Siemens gradient system
+  ``.asc`` file (``relaxed_rosettes.pns``).
+- The gradient spectrum in given frequency bands (by default the coil's
+  acoustic resonances from the ``.asc`` file), over a window of acquired TRs,
+  because it samples the waveforms of the whole window.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +23,7 @@ import pypulseq as pp
 
 from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
 from relaxed_rosettes.optimize import Shape
+from relaxed_rosettes.pns import design_pns
 from relaxed_rosettes.sequence import Schedule
 
 SPECTRUM_WINDOW_S = 0.05
@@ -77,21 +80,93 @@ def timing_report(seq: pp.Sequence) -> dict[str, Any]:
     return {"ok": bool(ok), "num_errors": len(errors), "errors": [str(e) for e in errors[:10]]}
 
 
-def pns_report(
-    seq: pp.Sequence, hardware: Path | SimpleNamespace, time_range: list[float]
-) -> dict[str, Any]:
-    """Peak PNS (fraction of the stimulation threshold) over a time range.
+def read_asc(path: Path) -> dict[str, Any]:
+    """A Siemens gradient system ``.asc`` file, with its ``$INCLUDE`` files.
 
-    ``hardware`` is a Siemens gradient ``.asc`` file, or a SAFE hardware
-    description (``pypulseq.utils.safe_pns_prediction.safe_example_hw()``).
+    pypulseq's ``readasc`` ignores ``$INCLUDE`` lines, but the gradient
+    system file (``MP_GradSys_*.asc``) keeps the SAFE PNS model parameters in
+    an included ``*_GSWD_SAFETY.asc`` file. Each included file is read from
+    the same directory and merged in; its values take precedence, as with a
+    textual include at the end of the file.
     """
-    hw = str(hardware) if isinstance(hardware, Path) else hardware
-    ok, pns_norm, pns_components, _ = seq.calculate_pns(hw, time_range=time_range, do_plots=False)
+    from pypulseq.utils.siemens.readasc import readasc
+
+    asc: dict[str, Any] = readasc(str(path))[0]
+    for line in path.read_text(errors="replace").splitlines():
+        match = re.match(r"\s*\$INCLUDE\s+(\S+)", line)
+        if match is None:
+            continue
+        included = path.parent / match.group(1)
+        if not included.exists():
+            raise FileNotFoundError(
+                f"{path} includes {included.name}, which is not in {path.parent}"
+            )
+        _merge(asc, read_asc(included))
+    return asc
+
+
+def _merge(base: dict[Any, Any], update: dict[Any, Any]) -> None:
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge(base[key], value)
+        else:
+            base[key] = value
+
+
+def pns_hardware(path: Path) -> SimpleNamespace:
+    """SAFE PNS hardware description of a gradient system ``.asc`` file."""
+    from pypulseq.utils.siemens.asc_to_hw import asc_to_hw
+
+    asc = read_asc(path)
+    try:
+        asc["GradPatSup"]["Phys"]["PNS"]
+        asc["asGPAParameters"][0]["sGCParameters"]["flGScaleFactorX"]
+    except KeyError as e:
+        raise ValueError(
+            f"{path} (with its includes) has no {e}: give the gradient system file, "
+            "MP_GradSys_*.asc, with its *_GSWD_SAFETY.asc next to it"
+        ) from None
+    hardware: SimpleNamespace = asc_to_hw(asc)
+    return hardware
+
+
+def acoustic_resonances(path: Path) -> list[tuple[float, float]]:
+    """Frequency bands (Hz) of the coil's acoustic resonances in an ``.asc`` file."""
+    gc = read_asc(path).get("asGPAParameters", {}).get(0, {}).get("sGCParameters", {})
+    frequencies = gc.get("aflAcousticResonanceFrequency", {})
+    widths = gc.get("aflAcousticResonanceBandwidth", {})
+    bands = []
+    for i, f in sorted(frequencies.items()):
+        width = float(widths.get(i, 0.0))
+        if f > 0 and width > 0:
+            bands.append((float(f) - width / 2, float(f) + width / 2))
+    return bands
+
+
+def pns_report(
+    config: Config,
+    schedule: Schedule,
+    shapes: list[Shape],
+    hardware: Path | SimpleNamespace,
+) -> dict[str, Any]:
+    """Peak PNS (fraction of the stimulation threshold) over every TR.
+
+    ``hardware`` is a Siemens gradient system ``.asc`` file (read with its
+    ``$INCLUDE`` files), or a SAFE hardware description
+    (``pypulseq.utils.safe_pns_prediction.safe_example_hw()``). The SAFE model
+    runs on the physical waveform of every TR, dummies included
+    (``relaxed_rosettes.pns``).
+    """
+    hw = pns_hardware(hardware) if isinstance(hardware, Path) else hardware
+    result = design_pns(config, schedule, shapes, hw)
+    worst = result.worst_tr
     return {
-        "ok": bool(ok),
-        "max_pns": float(np.max(pns_norm)),
-        "max_pns_per_axis": np.max(pns_components, axis=0).tolist(),
-        "time_range_s": time_range,
+        "ok": result.peak < 1.0,
+        "max_pns": result.peak,
+        "max_pns_per_axis": result.peak_per_axis.tolist(),
+        "worst_tr": worst,
+        "worst_tr_shape": int(schedule.shape_index[worst]),
+        "trs": schedule.num_trs,
     }
 
 
@@ -162,7 +237,8 @@ def format_report(report: dict[str, Any]) -> str:
         p = report["pns"]
         per_axis = "/".join(f"{v:.0%}" for v in p["max_pns_per_axis"])
         lines.append(
-            f"PNS: {'ok' if p['ok'] else 'FAIL'}: peak {p['max_pns']:.0%} (x/y/z {per_axis})"
+            f"PNS: {'ok' if p['ok'] else 'FAIL'}: peak {p['max_pns']:.1%} (x/y/z {per_axis}) "
+            f"over all {p['trs']} TRs; worst: TR {p['worst_tr']} (shape {p['worst_tr_shape']})"
         )
     s = report["spectrum"]
     lines.append(f"gradient spectrum peak: {s['peak_frequency_hz']:.0f} Hz ({s['peak_axis']})")

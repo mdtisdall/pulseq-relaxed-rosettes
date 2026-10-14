@@ -14,6 +14,7 @@ import pypulseq as pp
 
 from relaxed_rosettes import __version__
 from relaxed_rosettes.checks import (
+    acoustic_resonances,
     acquired_time_range,
     format_report,
     gradient_report,
@@ -150,14 +151,17 @@ def _parse_band(text: str) -> tuple[float, float]:
 def _cmd_check(args: argparse.Namespace) -> int:
     seq, config, schedule, shapes = _load_seq_and_design(args.seq)
     time_range = acquired_time_range(config, args.trs)
+    bands = list(args.band)
+    if args.asc and not bands:
+        bands = acoustic_resonances(args.asc)
     report: dict[str, Any] = {
         "config_digest": config.digest(),
         "timing": timing_report(seq),
         "gradients": gradient_report(config, schedule, shapes),
-        "spectrum": spectrum_report(seq, args.band, time_range),
+        "spectrum": spectrum_report(seq, bands, time_range),
     }
     if args.asc:
-        report["pns"] = pns_report(seq, args.asc, time_range)
+        report["pns"] = pns_report(config, schedule, shapes, args.asc)
     print(json.dumps(report, indent=2) if args.json else format_report(report))
     failed = not report["timing"]["ok"] or not report["gradients"]["nyquist_ok"]
     failed |= "pns" in report and not report["pns"]["ok"]
@@ -335,7 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
     check.add_argument(
-        "--asc", type=Path, help="Siemens gradient hardware .asc file, for the PNS check"
+        "--asc",
+        type=Path,
+        help="Siemens gradient system file (MP_GradSys_*.asc, with its *_GSWD_SAFETY.asc "
+        "next to it) for the PNS check; without --band, its acoustic resonances "
+        "are the spectrum bands",
     )
     check.add_argument(
         "--band",
@@ -349,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--trs",
         type=int,
         default=100,
-        help="acquired TRs for the PNS and spectrum checks (default: 100)",
+        help="acquired TRs for the spectrum check (default: 100); PNS covers every TR",
     )
     check.add_argument("--json", action="store_true", help="print the report as JSON")
     check.set_defaults(func=_cmd_check)
