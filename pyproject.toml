@@ -14,6 +14,13 @@ dependencies = [
 [project.scripts]
 relaxed-rosettes = "relaxed_rosettes.cli:main"
 
+[project.optional-dependencies]
+recon = [
+    "h5py>=3.16.0",
+    "ismrmrd>=1.15.0",
+    "twixtools>=0.24",
+]
+
 [dependency-groups]
 dev = ["mypy", "pytest", "ruff"]
 
@@ -32,7 +39,18 @@ select = ["E", "F", "W", "I", "B", "UP", "NPY"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pypulseq", "pypulseq.*", "scipy", "scipy.*"]
+module = [
+    "h5py",
+    "h5py.*",
+    "ismrmrd",
+    "ismrmrd.*",
+    "pypulseq",
+    "pypulseq.*",
+    "scipy",
+    "scipy.*",
+    "twixtools",
+    "twixtools.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

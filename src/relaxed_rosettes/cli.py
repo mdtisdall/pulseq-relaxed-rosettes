@@ -36,6 +36,7 @@ from relaxed_rosettes.sequence import (
     build_sequence,
     load_design,
     make_schedule,
+    read_seq_signature,
     save_design,
 )
 from relaxed_rosettes.system import make_opts
@@ -188,6 +189,46 @@ def _cmd_export_trajectory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_to_ismrmrd(args: argparse.Namespace) -> int:
+    try:
+        from relaxed_rosettes.recon.rawdata import write_ismrmrd
+        from relaxed_rosettes.recon.twix import read_twix
+    except ImportError as e:
+        print(f"error: to-ismrmrd needs the recon extra ({e})", file=sys.stderr)
+        return 1
+    _, config, schedule, shapes = _load_seq_and_design(args.seq)
+    signature = read_seq_signature(args.seq)
+    twix = read_twix(args.meas, config)
+    if not twix.has_signature(signature):
+        message = f"the header of {args.meas} does not have the signature {signature} of {args.seq}"
+        if not args.no_signature_check:
+            print(f"error: {message} (--no-signature-check to convert anyway)", file=sys.stderr)
+            return 1
+        print(f"warning: {message}", file=sys.stderr)
+    trajectory = make_trajectory(config, schedule, shapes)
+    report = write_ismrmrd(
+        args.output,
+        config,
+        trajectory,
+        twix,
+        signature,
+        allow_partial=args.allow_partial,
+        embed_trajectory=not args.no_trajectory,
+    )
+    print(
+        f"wrote {args.output}: {report.trs_written} of {report.trs_expected} TRs, "
+        f"{report.coils} coils, {report.noise_acquisitions} noise readouts "
+        f"(config {config.digest()}, signature {signature})"
+    )
+    if report.tr_spacing_error_s > config.readout.tr_s / 2:
+        print(
+            f"warning: the time stamps of consecutive TRs differ from the TR by up to "
+            f"{report.tr_spacing_error_s * 1e3:.1f} ms",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _parse_floats(text: str) -> list[float]:
     try:
         values = [float(v) for v in text.split(",")]
@@ -325,6 +366,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="acquired TRs to check against pypulseq's k-space (default: 2)",
     )
     export.set_defaults(func=_cmd_export_trajectory)
+
+    to_ismrmrd = commands.add_parser(
+        "to-ismrmrd",
+        help="convert Siemens raw data (meas.dat) of the sequence to ISMRMRD (recon extra)",
+    )
+    to_ismrmrd.add_argument("meas", type=Path, help="Siemens raw data file (meas.dat)")
+    to_ismrmrd.add_argument(
+        "seq", type=Path, help=".seq file that was played, with its design .npz next to it"
+    )
+    to_ismrmrd.add_argument(
+        "-o", "--output", type=Path, required=True, help="output ISMRMRD file (.h5; must not exist)"
+    )
+    to_ismrmrd.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="convert a scan that has fewer TRs than the design (e.g. stopped early)",
+    )
+    to_ismrmrd.add_argument(
+        "--no-trajectory",
+        action="store_true",
+        help="do not store the k-space trajectory in each acquisition",
+    )
+    to_ismrmrd.add_argument(
+        "--no-signature-check",
+        action="store_true",
+        help="convert even if the raw data header does not have the .seq signature",
+    )
+    to_ismrmrd.set_defaults(func=_cmd_to_ismrmrd)
 
     coverage = commands.add_parser(
         "coverage",
