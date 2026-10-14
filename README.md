@@ -66,6 +66,14 @@ uv run relaxed-rosettes export-traj relaxed_rosettes.seq -o traj.npz
 
 All acquired TRs sample the same times, and each plays one shape rotated, so the file is compact: `k_shape_per_m` (shapes × samples × 3, logical axes), `adc_time_in_tr_s` and `time_since_excitation_s` (samples), and for each acquired TR `tr_index`, `tr_start_s`, `shape_index`, `rotation_matrix`, and `rf_phase_rad`. The k-space position (1/m) of sample `s` in acquired TR `a` is `rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]`; `relaxed_rosettes.trajectory.load_trajectory(path)[1].k_per_m()` computes it for all (or some) TRs. Before writing, the export checks itself against pypulseq's k-space of the `.seq` file.
 
+Measure the resolution–time trade-off: for windows of scan time of several lengths, at several start times, how much of k-space each resolution needs is sampled:
+
+```
+uv run relaxed-rosettes coverage relaxed_rosettes.seq --windows 0.5,2,10,30 --resolutions-mm 8,4,2,1
+```
+
+It prints two tables (window length × resolution, median and worst over start times): the *coverage*, the fraction of k-space cells (spacing 1/FOV) inside the resolution's k-space ball that hold a sample; and the *gap*, the 95th percentile distance from that ball to the nearest sample, in cells, which shows how far a reconstruction must fill in between samples. `--tau-bins N` reports the worst of N bins of time since excitation; `--json` prints the arrays.
+
 ## Dependencies
 
 PyPulseq is pinned to a commit of the [mcencini fork](https://github.com/mcencini/pypulseq) (`experimental` branch), because it has the rotation extension (`pp.make_rotation`) and the official release does not yet ([pulseq/pypulseq#372](https://github.com/pulseq/pypulseq/pull/372)).
