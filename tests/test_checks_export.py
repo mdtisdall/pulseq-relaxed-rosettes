@@ -13,7 +13,7 @@ from relaxed_rosettes.checks import (
     spectrum_report,
 )
 from relaxed_rosettes.cli import main
-from relaxed_rosettes.config import Config
+from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
 from relaxed_rosettes.optimize import (
     Shape,
     k_weights,
@@ -24,6 +24,8 @@ from relaxed_rosettes.optimize import (
 from relaxed_rosettes.sequence import Schedule, build_sequence, make_schedule
 from relaxed_rosettes.trajectory import (
     Trajectory,
+    concomitant_phase_rad,
+    gradient_outer_integral_at_times,
     kspace_at_times,
     load_trajectory,
     make_trajectory,
@@ -85,6 +87,59 @@ def test_kspace_at_times_matches_optimizer_weights(shapes: list[Shape]) -> None:
     np.testing.assert_allclose(k, expected, atol=1e-12)
 
 
+def test_gradient_outer_integral_matches_dense_quadrature(shapes: list[Shape]) -> None:
+    g = shapes[0].g_mT_per_m
+    raster = SMALL.system.grad_raster_time_s
+    t = np.array([0.0, 3.3, 7.5, 251.2, len(g) - 0.7, len(g)]) * raster
+    gg = gradient_outer_integral_at_times(g, raster, t)
+    # Trapezoid on a fine grid of the same piecewise-linear waveform.
+    fine = np.linspace(0.0, len(g) * raster, 200 * len(g) + 1)
+    t_points = np.concatenate([[0.0], (np.arange(len(g)) + 0.5) * raster, [len(g) * raster]])
+    g_points = np.concatenate([np.zeros((1, 3)), g, np.zeros((1, 3))]) * 1e-3
+    g_fine = np.stack([np.interp(fine, t_points, g_points[:, i]) for i in range(3)], axis=1)
+    outer = np.einsum("ti,tj->tij", g_fine, g_fine)
+    steps = np.diff(fine)[:, None, None] * (outer[:-1] + outer[1:]) / 2
+    cumulative = np.concatenate([np.zeros((1, 3, 3)), np.cumsum(steps, axis=0)])
+    # Every time in t is on the fine grid.
+    expected = cumulative[np.rint(t / (raster / 200)).astype(int)]
+    np.testing.assert_allclose(gg, expected, rtol=1e-6, atol=1e-18)
+    np.testing.assert_allclose(gg, gg.transpose(0, 2, 1), atol=0)
+    assert np.all(np.linalg.eigvalsh(gg) > -1e-18)
+    assert np.all(np.diff(np.trace(gg, axis1=1, axis2=2)) >= 0)
+
+
+def test_gradient_outer_integral_rotates_with_waveform(shapes: list[Shape]) -> None:
+    g = shapes[1].g_mT_per_m
+    raster = SMALL.system.grad_raster_time_s
+    t = np.array([0.4, 120.0, 900.6]) * raster
+    r = make_schedule(SMALL).rotation_matrix[3]
+    rotated = gradient_outer_integral_at_times(g @ r.T, raster, t)
+    expected = r @ gradient_outer_integral_at_times(g, raster, t) @ r.T
+    np.testing.assert_allclose(rotated, expected, rtol=1e-12, atol=1e-20)
+
+
+def test_concomitant_phase_of_constant_gz() -> None:
+    # Gz alone, held for time T: B_c = Gz² (x² + y²) / (8 B0).
+    gz, duration = 20e-3, 5e-3
+    gg = np.zeros((3, 3))
+    gg[2, 2] = gz**2 * duration
+    r = np.array([[0.1, 0.0, 0.0], [0.0, 0.05, 0.3], [0.0, 0.0, 0.1]])
+    expected = (
+        2 * np.pi * GAMMA_HZ_PER_T * gz**2 * (r[:, 0] ** 2 + r[:, 1] ** 2) / (8 * SMALL.system.B0_T)
+    ) * duration
+    np.testing.assert_allclose(concomitant_phase_rad(SMALL, gg, r), expected)
+    # Gx alone: B_c = Gx² z² / (2 B0), and the x z cross term with Gx and Gz.
+    g = np.array([10e-3, 0.0, 10e-3])
+    gg = np.outer(g, g) * duration
+    xz = np.array([[0.1, 0.0, 0.1]])
+    bc = (g[2] ** 2 * 0.1**2 / 4 + g[0] ** 2 * 0.1**2 - g[0] * g[2] * 0.1 * 0.1) / (
+        2 * SMALL.system.B0_T
+    )
+    np.testing.assert_allclose(
+        concomitant_phase_rad(SMALL, gg[None], xz), [[2 * np.pi * GAMMA_HZ_PER_T * bc * duration]]
+    )
+
+
 def test_trajectory_matches_pypulseq(seq: pp.Sequence, trajectory: Trajectory) -> None:
     n = len(trajectory.adc_time_in_tr_s)
     expected = seq_kspace(seq, trajectory.tr_index, n)
@@ -108,6 +163,13 @@ def test_trajectory_fields(trajectory: Trajectory, schedule: Schedule) -> None:
         np.diff(trajectory.time_since_excitation_s), SMALL.readout.adc_dwell_s
     )
     assert trajectory.k_per_m(slice(1, 3)).shape == (2, SMALL.readout.adc_num_samples, 3)
+    gg = trajectory.gg_T2s_per_m2(slice(1, 3))
+    assert gg.shape == (2, SMALL.readout.adc_num_samples, 3, 3)
+    # A rotation keeps the trace (the sum of ∫ g_i² dt).
+    logical = trajectory.gg_shape_T2s_per_m2[trajectory.shape_index[1:3]]
+    np.testing.assert_allclose(
+        np.trace(gg, axis1=2, axis2=3), np.trace(logical, axis1=2, axis2=3), rtol=1e-12
+    )
 
 
 def test_gradient_report(shapes: list[Shape], schedule: Schedule) -> None:
@@ -151,6 +213,7 @@ def test_cli_export_traj(built: Path, tmp_path: Path, trajectory: Trajectory) ->
     config, loaded = load_trajectory(path)
     assert config == SMALL
     np.testing.assert_allclose(loaded.k_per_m(), trajectory.k_per_m())
+    np.testing.assert_allclose(loaded.gg_T2s_per_m2(), trajectory.gg_T2s_per_m2())
     np.testing.assert_array_equal(loaded.shape_index, trajectory.shape_index)
 
 
