@@ -114,11 +114,12 @@ def target_positions(config: Config, rng: np.random.Generator) -> FloatArray:
     """Target k-space positions of one shape: tip, 0, tip, ..., 0, spoil."""
     s = config.shapes
     directions = blue_noise_directions(rng, s.echoes_per_tr + 1, s.max_consecutive_tip_dot)
-    sqrt_radii = blue_noise_1d(
-        rng, s.echoes_per_tr, np.sqrt(s.tip_radius_min), np.sqrt(s.tip_radius_max)
+    power = s.tip_radius_power
+    u = blue_noise_1d(
+        rng, s.echoes_per_tr, s.tip_radius_min ** (1 / power), s.tip_radius_max ** (1 / power)
     )
-    rng.shuffle(sqrt_radii)
-    radii = np.append(sqrt_radii**2, s.spoil_moment_kmax)
+    rng.shuffle(u)
+    radii = np.append(u**power, s.spoil_moment_kmax)
 
     k = np.zeros((2 * s.echoes_per_tr + 1, 3))
     k[0::2] = directions * radii[:, None]

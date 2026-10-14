@@ -220,3 +220,90 @@ def format_metrics(metrics: WindowMetrics) -> str:
             )
         )
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class KTauMetrics:
+    """Sampling of the (|k|, time since excitation) plane over the whole scan.
+
+    Rotations do not change |k|(t), so this plane is sampled only by the
+    shapes: more shapes, not more TRs, fill it in. ``counts`` has shape
+    (shells, tau bins): equal-width |k| shells over [0, k_max) and equal tau
+    bins over the ADC readout, counting the samples of every acquired TR.
+    """
+
+    counts: NDArray[np.int64]
+    tau_bin_s: float
+    early_s: float
+
+    @property
+    def empty(self) -> NDArray[np.bool_]:
+        empty: NDArray[np.bool_] = self.counts == 0
+        return empty
+
+    @property
+    def empty_fraction(self) -> float:
+        return float(self.empty.mean())
+
+    @property
+    def empty_fraction_early(self) -> float:
+        """Empty fraction of the tau bins before ``early_s``."""
+        return float(self.empty[:, : max(1, round(self.early_s / self.tau_bin_s))].mean())
+
+    @property
+    def empty_fraction_outer_half(self) -> float:
+        """Empty fraction of the shells from k_max / 2 to k_max."""
+        return float(self.empty[len(self.counts) // 2 :].mean())
+
+    @property
+    def max_tau_gap_s(self) -> FloatArray:
+        """(shells,) longest run of empty tau bins in each shell, in seconds."""
+        gaps = np.zeros(len(self.counts))
+        for shell, empty in enumerate(self.empty):
+            run = best = 0
+            for e in empty:
+                run = run + 1 if e else 0
+                best = max(best, run)
+            gaps[shell] = best * self.tau_bin_s
+        return gaps
+
+
+def ktau_metrics(
+    config: Config,
+    trajectory: Trajectory,
+    shells: int = 20,
+    tau_bin_s: float = 0.5e-3,
+    early_s: float = 5e-3,
+) -> KTauMetrics:
+    """(|k|, tau) sampling of the acquired TRs."""
+    tau = trajectory.time_since_excitation_s
+    n_tau = int(np.ceil(tau[-1] / tau_bin_s + 1e-9))
+    tau_bin = np.minimum((tau / tau_bin_s).astype(np.int64), n_tau - 1)
+    uses = np.bincount(trajectory.shape_index, minlength=len(trajectory.k_shape_per_m))
+    counts = np.zeros((shells, n_tau), dtype=np.int64)
+    for k_shape, n in zip(trajectory.k_shape_per_m, uses, strict=True):
+        if n == 0:
+            continue
+        radius = np.linalg.norm(k_shape, axis=1) / config.k_max_per_m
+        inside = radius < 1.0
+        shell = (radius[inside] * shells).astype(np.int64)
+        np.add.at(counts, (shell, tau_bin[inside]), n)
+    return KTauMetrics(counts=counts, tau_bin_s=tau_bin_s, early_s=early_s)
+
+
+def format_ktau(m: KTauMetrics) -> str:
+    """Text summary of the (|k|, tau) sampling."""
+    shells = len(m.counts)
+    gaps = m.max_tau_gap_s * 1e3
+    return "\n".join(
+        [
+            f"(|k|, tau) sampling over the scan: {shells} |k| shells x "
+            f"{m.counts.shape[1]} tau bins of {m.tau_bin_s * 1e3:g} ms",
+            f"  empty cells: {m.empty_fraction:.1%} overall, "
+            f"{m.empty_fraction_early:.1%} before {m.early_s * 1e3:g} ms, "
+            f"{m.empty_fraction_outer_half:.1%} in the outer half of k-space",
+            f"  longest tau gap in a shell: median {np.median(gaps):.1f} ms, "
+            f"worst {gaps.max():.1f} ms (shell {int(np.argmax(gaps))} of {shells}, "
+            "0 = center)",
+        ]
+    )

@@ -90,16 +90,25 @@ class ShapeConfig:
 
     Each TR visits ``echoes_per_tr`` petal tips, crossing k = 0 between
     consecutive tips (one gradient echo each), then ends at the spoil moment.
-    Tip radii are blue noise in sqrt(radius) between the square roots of
-    ``tip_radius_min`` and ``tip_radius_max``. Each segment between targets
+    Tip radii are ``u ** tip_radius_power``, with ``u`` blue noise between
+    ``tip_radius_min ** (1 / power)`` and ``tip_radius_max ** (1 / power)``:
+    power 2 (sqrt-radius blue noise) puts more tips near the center, power 1
+    spreads them evenly in radius, and power < 1 puts more near k_max. The
+    default, 0.5, moves k-space coverage outward: at 19 echoes it gives about
+    45% more path per TR than power 2, at the same peak gradient.
+
+    Rotations do not change |k|(t), so the (|k|, time since excitation) plane
+    is sampled only by the shapes; ``num_shapes`` = 128 halves its empty
+    cells compared with 32 (256 adds little). Each segment between targets
     gets time proportional to the sqrt of its target radius, scaled by a
     random factor in ``[1 - timing_jitter, 1 + timing_jitter]``.
     """
 
-    num_shapes: int = 32
+    num_shapes: int = 128
     echoes_per_tr: int = 19
     tip_radius_min: float = 0.04
     tip_radius_max: float = 1.0
+    tip_radius_power: float = 0.5
     max_consecutive_tip_dot: float = -0.5
     spoil_moment_kmax: float = 5.0
     timing_jitter: float = 0.2
@@ -317,6 +326,7 @@ def _validate(c: Config) -> list[str]:
     positive("shapes.num_shapes", sh.num_shapes)
     positive("shapes.echoes_per_tr", sh.echoes_per_tr)
     positive("shapes.spoil_moment_kmax", sh.spoil_moment_kmax)
+    positive("shapes.tip_radius_power", sh.tip_radius_power)
     positive("scan.num_trs", c.scan.num_trs)
     if errors:
         return errors

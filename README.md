@@ -76,6 +76,8 @@ uv run relaxed-rosettes coverage relaxed_rosettes.seq --windows 0.5,2,10,30 --re
 
 It prints two tables (window length × resolution, median and worst over start times): the *coverage*, the fraction of k-space cells (spacing 1/FOV) inside the resolution's k-space ball that hold a sample; and the *gap*, the 95th percentile distance from that ball to the nearest sample, in cells, which shows how far a reconstruction must fill in between samples. `--tau-bins N` reports the worst of N bins of time since excitation; `--json` prints the arrays.
 
+It also reports the sampling of the (|k|, time since excitation) plane over the whole scan: the fraction of (|k| shell × τ bin) cells with no sample (overall, early in the readout, and in the outer half of k-space) and the longest τ gap in any shell. Rotations do not change |k|(t), so only the shapes sample this plane; more shapes (`shapes.num_shapes`), not more TRs, fill it in.
+
 ## Dependencies
 
 PyPulseq is pinned to a commit of the [mcencini fork](https://github.com/mcencini/pypulseq) (`experimental` branch), because it has the rotation extension (`pp.make_rotation`) and the official release does not yet ([pulseq/pypulseq#372](https://github.com/pulseq/pypulseq/pull/372)).
