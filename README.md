@@ -34,6 +34,14 @@ uv run relaxed-rosettes targets design.toml -o targets.npz
 
 The `.npz` file has `k` (shapes × targets × 3, in units of k_max), `t_s` (shapes × targets, seconds from the start of the TR block), and the config that made them.
 
+Optimize the gradient waveform of every shape (minimum slew energy, with the gradients off during the RF pulse and at the end of the TR, within the gradient and slew limits, through every target):
+
+```
+uv run relaxed-rosettes shapes design.toml -o shapes.npz
+```
+
+Each shape is a convex problem, solved with cvxpy and Clarabel, in parallel (`--jobs`, default: the CPU count). The `.npz` file has `g_mT_per_m` (shapes × raster points × 3, sampled at the raster centers, as a pypulseq arbitrary gradient with `first = last = 0`), the targets, and the config.
+
 ## Dependencies
 
 PyPulseq is pinned to a commit of the [mcencini fork](https://github.com/mcencini/pypulseq) (`experimental` branch), because it has the rotation extension (`pp.make_rotation`) and the official release does not yet ([pulseq/pypulseq#372](https://github.com/pulseq/pypulseq/pull/372)).

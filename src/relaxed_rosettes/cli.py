@@ -9,6 +9,12 @@ from pathlib import Path
 
 from relaxed_rosettes import __version__
 from relaxed_rosettes.config import Config, ConfigError
+from relaxed_rosettes.optimize import (
+    ShapeOptimizationError,
+    optimize_shapes,
+    save_shapes,
+    shape_metrics,
+)
 from relaxed_rosettes.targets import make_targets, save_targets
 
 
@@ -60,6 +66,21 @@ def _cmd_targets(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_shapes(args: argparse.Namespace) -> int:
+    config = _load_config(args)
+    shapes = optimize_shapes(config, jobs=args.jobs)
+    save_shapes(args.output, config, shapes)
+    print(f"{'shape':>5} {'max |g| mT/m':>13} {'max slew T/m/s':>15} {'k error':>9} {'solve s':>8}")
+    for i, shape in enumerate(shapes):
+        m = shape_metrics(config, shape)
+        print(
+            f"{i:5d} {m.max_grad_mT_per_m:13.2f} {m.max_slew_T_per_m_per_s:15.2f} "
+            f"{m.max_target_error_kmax:9.1e} {shape.solve_time_s:8.2f}"
+        )
+    print(f"wrote {args.output}: {len(shapes)} shapes (config {config.digest()})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="relaxed-rosettes",
@@ -89,6 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
     targets.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
     targets.set_defaults(func=_cmd_targets)
 
+    shapes = commands.add_parser("shapes", help="optimize the gradient waveform of every shape")
+    _add_config_args(shapes)
+    shapes.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
+    shapes.add_argument(
+        "--jobs", type=int, default=None, help="worker processes (default: CPU count)"
+    )
+    shapes.set_defaults(func=_cmd_shapes)
+
     return parser
 
 
@@ -96,7 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         status: int = args.func(args)
-    except (ConfigError, OSError) as e:
+    except (ConfigError, ShapeOptimizationError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return status
