@@ -90,6 +90,16 @@ It reads the Siemens `meas.dat` file with twixtools and checks that its header h
 
 `relaxed_rosettes.recon.rawdata.load_rawdata(path)` reads the file: the noise samples, the TR index, shape, and time stamp of each TR, and the data of any TRs on demand (`read`). `check_trajectory(config, trajectory)` fails unless the raw data and a trajectory file come from the same design.
 
+## Tip-radius density
+
+Where the petal tips are, in radius, decides how samples spread over k-space. `shapes.tip_density` chooses how the radii are distributed:
+
+- `power` (default): radii `u ** tip_radius_power`, `u` blue noise.
+- `exponent`: derived so that a window of scan time covers the k-space ball of resolution `res` in a time proportional to `res ** -resolution_time_exponent` (2 to below 3), over the resolutions from `density_resolution_min_m` to `density_resolution_max_m`.
+- `filter`: derived to minimize the noise of Hann-filtered reconstructions at log-spaced resolutions in the same range, weighted `res ** filter_prior_power` per octave.
+
+The derived models calibrate the trajectory speed on a few shapes (`calibration_shapes`, `calibration_iterations`). [docs/sampling-density.md](docs/sampling-density.md) derives both models and compares the designs.
+
 ## Dependencies
 
 PyPulseq is pinned to a commit of the [mcencini fork](https://github.com/mcencini/pypulseq) (`experimental` branch), because it has the rotation extension (`pp.make_rotation`) and the official release does not yet ([pulseq/pypulseq#372](https://github.com/pulseq/pypulseq/pull/372)).
