@@ -86,7 +86,7 @@ Where the petal tips are, in radius, decides how samples spread over k-space. `s
 - `exponent`: derived so that a window of scan time covers the k-space ball of resolution `res` in a time proportional to `res ** -resolution_time_exponent` (2 to below 3), over the resolutions from `density_resolution_min_m` to `density_resolution_max_m`.
 - `filter`: derived to minimize the noise of Hann-filtered reconstructions at log-spaced resolutions in the same range, weighted `res ** filter_prior_power` per octave.
 
-The derived models calibrate the trajectory speed on a few shapes (`calibration_shapes`, `calibration_iterations`). [docs/sampling-density.md](docs/sampling-density.md) derives both models and compares the designs.
+The derived models calibrate the trajectory speed on a few shapes (`calibration_shapes`, `calibration_iterations`). [docs/sampling-density.md](docs/sampling-density.md) derives both models and compares the designs. [docs/lattice-sampling.md](docs/lattice-sampling.md) discusses optimal-lattice (BCC, D4, D5) sampling references and their effect on these numbers.
 
 ## Dependencies
 
