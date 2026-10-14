@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-uv sync --frozen
+uv sync --frozen --all-extras
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests

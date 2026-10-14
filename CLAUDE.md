@@ -20,6 +20,11 @@ with [PyPulseq](https://github.com/pulseq/pypulseq). The package is in
   units, unit in the field name). Outputs are reproducible from the config,
   which includes the seed. Use `np.random.Generator` seeded from the config,
   not global `np.random`.
+- Reconstruction: `relaxed_rosettes.recon`, behind the optional `recon`
+  extra (`uv add --optional recon <package>`). Its raw data input is
+  ISMRMRD only; Siemens `meas.dat` is read only by the `to-ismrmrd`
+  converter. The CLI imports `recon` modules inside the command, so the base
+  install works without the extra.
 - CLI: `relaxed-rosettes` (`src/relaxed_rosettes/cli.py`). No custom
   plotting in this package: outputs are `.seq` and `.npz` files for other
   tools.
@@ -48,7 +53,7 @@ this project:
   different tool. The hook blocks `git worktree add` and `git worktree move`
   to any other path.
 - Dependency sync, one time in each new worktree, before sub-agents start:
-  `nix develop --command uv sync --frozen`
+  `nix develop --command uv sync --frozen --all-extras`
 - GitHub CLI: `direnv exec . gh ...`. It uses this repository's own
   fine-grained token in the git-ignored `.envrc.local`. The permissions that
   the token needs are in `.claude/gh-token-permissions`. `git` uses SSH.

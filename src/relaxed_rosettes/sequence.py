@@ -10,6 +10,8 @@ ramps between them.
 from __future__ import annotations
 
 import copy
+import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,6 +149,26 @@ def build_sequence(config: Config, shapes: list[Shape], schedule: Schedule) -> p
     if not ok:
         raise ValueError("sequence timing check failed:\n" + "".join(str(r) for r in report))
     return seq
+
+
+def read_seq_signature(path: Path) -> str:
+    """The MD5 signature of a ``.seq`` file (lowercase hex), checked against its content.
+
+    pypulseq signs a ``.seq`` file with the MD5 of everything before the
+    newline that precedes ``[SIGNATURE]``. The Siemens interpreter records the
+    signature in the raw data header, which links the raw data to this file.
+    """
+    text = path.read_bytes()
+    start = text.rfind(b"\n[SIGNATURE]")
+    if start < 0:
+        raise ValueError(f"{path} has no [SIGNATURE] section")
+    match = re.search(rb"^Hash\s+([0-9a-fA-F]{32})\s*$", text[start:], re.MULTILINE)
+    if match is None:
+        raise ValueError(f"{path}: the [SIGNATURE] section has no MD5 hash")
+    signature = match.group(1).decode().lower()
+    if hashlib.md5(text[:start]).hexdigest() != signature:
+        raise ValueError(f"{path}: the content does not match its signature")
+    return signature
 
 
 def save_design(path: Path, config: Config, schedule: Schedule, shapes: list[Shape]) -> None:
