@@ -84,11 +84,19 @@ class GradientConfig:
 
 @dataclass(frozen=True)
 class ShapeConfig:
-    """Rosette shape design. k-space radii are in units of k_max."""
+    """Rosette shape design. k-space radii are in units of k_max.
+
+    Each TR visits ``echoes_per_tr`` petal tips, crossing k = 0 between
+    consecutive tips (one gradient echo each), then ends at the spoil moment.
+    Tip radii are blue noise in sqrt(radius) between the square roots of
+    ``tip_radius_min`` and ``tip_radius_max``. Each segment between targets
+    gets time proportional to the sqrt of its target radius, scaled by a
+    random factor in ``[1 - timing_jitter, 1 + timing_jitter]``.
+    """
 
     num_shapes: int = 32
     echoes_per_tr: int = 19
-    tip_radius_min: float = 0.2
+    tip_radius_min: float = 0.04
     tip_radius_max: float = 1.0
     max_consecutive_tip_dot: float = -0.5
     spoil_moment_kmax: float = 5.0
@@ -130,6 +138,28 @@ class Config:
     def raster_points_per_tr(self) -> int:
         """Number of gradient raster points in one TR."""
         return round(self.readout.tr_s / self.system.grad_raster_time_s)
+
+    # Times within a TR block, from the start of the block.
+
+    @property
+    def rf_center_s(self) -> float:
+        """Center of the hard pulse (k = 0 reference)."""
+        return self.system.rf_dead_time_s + self.excitation.rf_duration_s / 2
+
+    @property
+    def rf_end_s(self) -> float:
+        """End of the hard pulse; the gradients are off until here."""
+        return self.system.rf_dead_time_s + self.excitation.rf_duration_s
+
+    @property
+    def adc_start_s(self) -> float:
+        """Start of the ADC, after the RF ringdown."""
+        return self.rf_end_s + self.system.rf_ringdown_time_s
+
+    @property
+    def adc_end_s(self) -> float:
+        """End of the ADC."""
+        return self.adc_start_s + self.readout.adc_num_samples * self.readout.adc_dwell_s
 
     def to_dict(self) -> dict[str, Any]:
         """Plain dict of all values (enums as strings), in TOML layout."""

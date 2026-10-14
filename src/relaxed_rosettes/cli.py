@@ -9,6 +9,7 @@ from pathlib import Path
 
 from relaxed_rosettes import __version__
 from relaxed_rosettes.config import Config, ConfigError
+from relaxed_rosettes.targets import make_targets, save_targets
 
 
 def _load_config(args: argparse.Namespace) -> Config:
@@ -46,6 +47,19 @@ def _cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_targets(args: argparse.Namespace) -> int:
+    config = _load_config(args)
+    targets = make_targets(config)
+    save_targets(args.output, config, targets)
+    crossings = [t.crossing_times_s for t in targets]
+    first, last = min(c[0] for c in crossings), max(c[-1] for c in crossings)
+    print(
+        f"wrote {args.output}: {len(targets)} shapes, {targets[0].num_echoes} echoes each, "
+        f"crossings from {first * 1e3:.2f} to {last * 1e3:.2f} ms (config {config.digest()})"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="relaxed-rosettes",
@@ -67,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_args(show)
     show.set_defaults(func=_cmd_config_show)
+
+    targets = commands.add_parser(
+        "targets", help="generate the k-space targets and times of every shape"
+    )
+    _add_config_args(targets)
+    targets.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
+    targets.set_defaults(func=_cmd_targets)
 
     return parser
 
