@@ -20,6 +20,7 @@ It is solved with cvxpy and Clarabel.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 import time
@@ -31,7 +32,14 @@ import cvxpy as cp
 import numpy as np
 from numpy.typing import NDArray
 
-from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
+from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config, TipDensity
+from relaxed_rosettes.density import (
+    TipSurvival,
+    estimate_speed,
+    radial_grid,
+    survival_from_profile,
+    target_profile,
+)
 from relaxed_rosettes.targets import ShapeTargets, make_targets
 
 FloatArray = NDArray[np.float64]
@@ -205,13 +213,57 @@ def optimize_shapes(config: Config, jobs: int | None = None) -> list[Shape]:
     ``jobs`` is the number of worker processes (default: the CPU count, at
     most the number of shapes); 1 solves in this process.
     """
-    targets = make_targets(config)
+    survival = None
+    if config.shapes.tip_density is not TipDensity.POWER:
+        survival = calibrated_survival(config, jobs)
+    return _optimize_targets(config, make_targets(config, survival), jobs)
+
+
+def _optimize_targets(config: Config, targets: list[ShapeTargets], jobs: int | None) -> list[Shape]:
     work = [(config, t, i) for i, t in enumerate(targets)]
     jobs = min(jobs or os.cpu_count() or 1, len(work))
     if jobs == 1:
         return [_optimize_one(w) for w in work]
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         return list(pool.map(_optimize_one, work))
+
+
+def calibrated_survival(config: Config, jobs: int | None = None) -> TipSurvival:
+    """Tip survival of a derived tip density, with the trajectory speed calibrated.
+
+    Starts from a constant speed; then, ``calibration_iterations`` times,
+    optimizes the first ``calibration_shapes`` shapes, estimates the speed at
+    each radius from their samples, and recomputes the tips
+    (``relaxed_rosettes.density``).
+    """
+    from relaxed_rosettes.trajectory import kspace_at_times
+
+    s = config.shapes
+    grid = radial_grid()
+    profile = target_profile(config, grid)
+    speed = np.ones_like(grid)
+    survival = survival_from_profile(grid, profile, speed, s.tip_radius_min, s.tip_radius_max)
+    calibration = dataclasses.replace(
+        config, shapes=dataclasses.replace(s, num_shapes=s.calibration_shapes)
+    )
+    r = config.readout
+    adc_times = np.asarray(
+        config.adc_start_s + (np.arange(r.adc_num_samples) + 0.5) * r.adc_dwell_s,
+        dtype=np.float64,
+    )
+    for _ in range(s.calibration_iterations):
+        shapes = _optimize_targets(calibration, make_targets(calibration, survival), jobs)
+        samples = [
+            np.linalg.norm(
+                kspace_at_times(sh.g_mT_per_m, config.system.grad_raster_time_s, adc_times),
+                axis=1,
+            )
+            / config.k_max_per_m
+            for sh in shapes
+        ]
+        speed = estimate_speed(grid, samples)
+        survival = survival_from_profile(grid, profile, speed, s.tip_radius_min, s.tip_radius_max)
+    return survival
 
 
 def save_shapes(path: Path, config: Config, shapes: list[Shape]) -> None:

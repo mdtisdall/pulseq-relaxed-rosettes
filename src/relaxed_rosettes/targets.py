@@ -18,7 +18,8 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from relaxed_rosettes.config import Config
+from relaxed_rosettes.config import Config, TipDensity
+from relaxed_rosettes.density import TipSurvival
 
 FloatArray = NDArray[np.float64]
 
@@ -110,16 +111,40 @@ def blue_noise_1d(
     return values
 
 
-def target_positions(config: Config, rng: np.random.Generator) -> FloatArray:
-    """Target k-space positions of one shape: tip, 0, tip, ..., 0, spoil."""
+def tip_radii(
+    config: Config, quantiles: FloatArray, survival: TipSurvival | None = None
+) -> FloatArray:
+    """Tip radii (units of k_max) for quantiles in [0, 1) of the radius distribution.
+
+    The ``power`` model maps quantile ``q`` to ``u ** power`` with ``u``
+    uniform between ``tip_radius_min ** (1 / power)`` and
+    ``tip_radius_max ** (1 / power)``. The derived models need the tip
+    ``survival`` (``relaxed_rosettes.density``).
+    """
+    s = config.shapes
+    if s.tip_density is TipDensity.POWER:
+        p = s.tip_radius_power
+        u_min, u_max = s.tip_radius_min ** (1 / p), s.tip_radius_max ** (1 / p)
+        radii: FloatArray = (u_min + quantiles * (u_max - u_min)) ** p
+        return radii
+    if survival is None:
+        raise ValueError(f"tip density {s.tip_density} needs a tip survival function")
+    return survival.radii(quantiles)
+
+
+def target_positions(
+    config: Config, rng: np.random.Generator, survival: TipSurvival | None = None
+) -> FloatArray:
+    """Target k-space positions of one shape: tip, 0, tip, ..., 0, spoil.
+
+    The tip radii are at quantiles of the radius distribution that are blue
+    noise in [0, 1), shuffled.
+    """
     s = config.shapes
     directions = blue_noise_directions(rng, s.echoes_per_tr + 1, s.max_consecutive_tip_dot)
-    power = s.tip_radius_power
-    u = blue_noise_1d(
-        rng, s.echoes_per_tr, s.tip_radius_min ** (1 / power), s.tip_radius_max ** (1 / power)
-    )
-    rng.shuffle(u)
-    radii = np.append(u**power, s.spoil_moment_kmax)
+    quantiles = blue_noise_1d(rng, s.echoes_per_tr, 0.0, 1.0)
+    rng.shuffle(quantiles)
+    radii = np.append(tip_radii(config, quantiles, survival), s.spoil_moment_kmax)
 
     k = np.zeros((2 * s.echoes_per_tr + 1, 3))
     k[0::2] = directions * radii[:, None]
@@ -159,20 +184,33 @@ def target_times(config: Config, k: FloatArray, rng: np.random.Generator) -> Flo
     return t
 
 
-def make_shape_targets(config: Config, rng: np.random.Generator) -> ShapeTargets:
+def make_shape_targets(
+    config: Config, rng: np.random.Generator, survival: TipSurvival | None = None
+) -> ShapeTargets:
     """Positions and times of the targets of one shape."""
-    k = target_positions(config, rng)
+    k = target_positions(config, rng, survival)
     return ShapeTargets(k=k, t_s=target_times(config, k, rng))
 
 
-def make_targets(config: Config) -> list[ShapeTargets]:
+def make_targets(config: Config, survival: TipSurvival | None = None) -> list[ShapeTargets]:
     """Targets of every shape.
 
     Each shape has its own random stream, derived from the config seed and
-    the shape index, so shape ``i`` does not depend on ``num_shapes``.
+    the shape index, so shape ``i`` does not depend on ``num_shapes``. A
+    derived tip density (``exponent``, ``filter``) without a given
+    ``survival`` is calibrated first, which optimizes ``calibration_shapes``
+    shapes ``calibration_iterations`` times.
     """
-    streams = np.random.SeedSequence(config.seed).spawn(config.shapes.num_shapes)
-    return [make_shape_targets(config, np.random.default_rng(stream)) for stream in streams]
+    s = config.shapes
+    if s.tip_density is not TipDensity.POWER and survival is None:
+        from relaxed_rosettes.optimize import calibrated_survival
+
+        survival = calibrated_survival(config)
+    streams = np.random.SeedSequence(config.seed).spawn(s.num_shapes)
+    return [
+        make_shape_targets(config, np.random.default_rng(stream), survival=survival)
+        for stream in streams
+    ]
 
 
 def save_targets(path: Path, config: Config, targets: list[ShapeTargets]) -> None:

@@ -28,6 +28,14 @@ class RfPhase(StrEnum):
     QUADRATIC_117 = "quadratic117"
 
 
+class TipDensity(StrEnum):
+    """How the tip radii are distributed (see ``relaxed_rosettes.density``)."""
+
+    POWER = "power"
+    EXPONENT = "exponent"
+    FILTER = "filter"
+
+
 @dataclass(frozen=True)
 class SystemConfig:
     """Scanner limits and timing, passed to ``pypulseq.Opts``."""
@@ -97,6 +105,17 @@ class ShapeConfig:
     default, 0.5, moves k-space coverage outward: at 19 echoes it gives about
     45% more path per TR than power 2, at the same peak gradient.
 
+    With ``tip_density`` other than ``power``, the radii follow a density
+    derived from a target k-space sampling profile instead
+    (``relaxed_rosettes.density``), over the resolutions from
+    ``density_resolution_min_m`` (finest) to ``density_resolution_max_m``:
+    ``exponent`` makes a window of scan time cover the k-space ball of
+    resolution ``res`` in a time proportional to
+    ``res ** -resolution_time_exponent`` (2 to below 3); ``filter`` is SNR-optimal
+    for Hann-filtered reconstructions at log-spaced resolutions, weighted
+    ``res ** filter_prior_power`` per octave. Both calibrate the trajectory
+    speed on ``calibration_shapes`` shapes, ``calibration_iterations`` times.
+
     Rotations do not change |k|(t), so the (|k|, time since excitation) plane
     is sampled only by the shapes; ``num_shapes`` = 128 halves its empty
     cells compared with 32 (256 adds little). Each segment between targets
@@ -109,6 +128,13 @@ class ShapeConfig:
     tip_radius_min: float = 0.04
     tip_radius_max: float = 1.0
     tip_radius_power: float = 0.5
+    tip_density: TipDensity = TipDensity.POWER
+    resolution_time_exponent: float = 2.5
+    density_resolution_min_m: float = 1e-3
+    density_resolution_max_m: float = 8e-3
+    filter_prior_power: float = 0.0
+    calibration_iterations: int = 2
+    calibration_shapes: int = 16
     max_consecutive_tip_dot: float = -0.5
     spoil_moment_kmax: float = 5.0
     timing_jitter: float = 0.2
@@ -327,6 +353,8 @@ def _validate(c: Config) -> list[str]:
     positive("shapes.echoes_per_tr", sh.echoes_per_tr)
     positive("shapes.spoil_moment_kmax", sh.spoil_moment_kmax)
     positive("shapes.tip_radius_power", sh.tip_radius_power)
+    positive("shapes.calibration_shapes", sh.calibration_shapes)
+    positive("shapes.density_resolution_min_m", sh.density_resolution_min_m)
     positive("scan.num_trs", c.scan.num_trs)
     if errors:
         return errors
@@ -343,6 +371,15 @@ def _validate(c: Config) -> list[str]:
         errors.append("need 0 < shapes.tip_radius_min < shapes.tip_radius_max <= 1")
     if not -1 < sh.max_consecutive_tip_dot <= 1:
         errors.append("shapes.max_consecutive_tip_dot must be in (-1, 1]")
+    if not 2 <= sh.resolution_time_exponent < 3:
+        errors.append("shapes.resolution_time_exponent must be in [2, 3)")
+    if not sh.density_resolution_min_m < sh.density_resolution_max_m:
+        errors.append("need shapes.density_resolution_min_m < density_resolution_max_m")
+    derived = sh.tip_density is not TipDensity.POWER
+    if derived and sh.density_resolution_min_m < c.geometry.resolution_m - 1e-12:
+        errors.append("shapes.density_resolution_min_m is finer than geometry.resolution_m")
+    if sh.calibration_iterations < 0:
+        errors.append("shapes.calibration_iterations must be >= 0")
     if not 0 <= sh.timing_jitter < 1:
         errors.append("shapes.timing_jitter must be in [0, 1)")
     if c.scan.num_dummy_trs < 0:
