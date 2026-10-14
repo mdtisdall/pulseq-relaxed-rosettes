@@ -42,6 +42,14 @@ uv run relaxed-rosettes shapes design.toml -o shapes.npz
 
 Each shape is a convex problem, solved with cvxpy and Clarabel, in parallel (`--jobs`, default: the CPU count). The `.npz` file has `g_mT_per_m` (shapes × raster points × 3, sampled at the raster centers, as a pypulseq arbitrary gradient with `first = last = 0`), the targets, and the config.
 
+Build the `.seq` file from the optimized shapes:
+
+```
+uv run relaxed-rosettes sequence shapes.npz -o relaxed_rosettes.seq
+```
+
+Each TR is one block: a hard pulse with the gradients off, one shape rotated by a rotation event, and the ADC (none in the dummy TRs at the start). The rotations are a super-Fibonacci spiral on SO(3), split among the shapes, in shuffled order. Next to the `.seq` file, `relaxed_rosettes.npz` has the schedule of each TR: `shape_index`, `rotation_matrix` (physical gradient = R @ shape gradient), `rf_phase_rad` (also the ADC phase), `acquired`, and the config.
+
 ## Dependencies
 
 PyPulseq is pinned to a commit of the [mcencini fork](https://github.com/mcencini/pypulseq) (`experimental` branch), because it has the rotation extension (`pp.make_rotation`) and the official release does not yet ([pulseq/pypulseq#372](https://github.com/pulseq/pypulseq/pull/372)).

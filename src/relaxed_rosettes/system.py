@@ -20,4 +20,6 @@ def make_opts(config: Config) -> pp.Opts:
         adc_dead_time=s.adc_dead_time_s,
         grad_raster_time=s.grad_raster_time_s,
         B0=s.B0_T,
+        adc_samples_limit=s.adc_samples_limit,
+        adc_samples_divisor=s.adc_samples_divisor,
     )

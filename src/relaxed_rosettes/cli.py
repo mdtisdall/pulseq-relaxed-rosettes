@@ -11,10 +11,12 @@ from relaxed_rosettes import __version__
 from relaxed_rosettes.config import Config, ConfigError
 from relaxed_rosettes.optimize import (
     ShapeOptimizationError,
+    load_shapes,
     optimize_shapes,
     save_shapes,
     shape_metrics,
 )
+from relaxed_rosettes.sequence import build_sequence, make_schedule, save_schedule
 from relaxed_rosettes.targets import make_targets, save_targets
 
 
@@ -81,6 +83,21 @@ def _cmd_shapes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sequence(args: argparse.Namespace) -> int:
+    config, shapes = load_shapes(args.shapes)
+    schedule = make_schedule(config)
+    seq = build_sequence(config, shapes, schedule)
+    output: Path = args.output
+    seq.write(str(output))
+    schedule_path = output.with_suffix(".npz")
+    save_schedule(schedule_path, config, schedule)
+    print(
+        f"wrote {output}: {schedule.num_trs} TRs ({config.scan.num_dummy_trs} dummy), "
+        f"{seq.duration()[0]:.1f} s; schedule in {schedule_path} (config {config.digest()})"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="relaxed-rosettes",
@@ -118,6 +135,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shapes.set_defaults(func=_cmd_shapes)
 
+    sequence = commands.add_parser(
+        "sequence",
+        help="build the .seq file from optimized shapes, and its TR schedule (.npz)",
+    )
+    sequence.add_argument("shapes", type=Path, help=".npz file from `relaxed-rosettes shapes`")
+    sequence.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="output .seq file; the schedule goes next to it, with the suffix .npz",
+    )
+    sequence.set_defaults(func=_cmd_sequence)
+
     return parser
 
 
@@ -125,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         status: int = args.func(args)
-    except (ConfigError, ShapeOptimizationError, OSError) as e:
+    except (ConfigError, ShapeOptimizationError, OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return status

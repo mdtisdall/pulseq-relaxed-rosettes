@@ -39,6 +39,8 @@ class SystemConfig:
     adc_dead_time_s: float = 0.0
     grad_raster_time_s: float = 10e-6
     B0_T: float = 2.89
+    adc_samples_limit: int = 8192
+    adc_samples_divisor: int = 4
 
 
 @dataclass(frozen=True)
