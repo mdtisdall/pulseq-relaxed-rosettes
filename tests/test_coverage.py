@@ -122,6 +122,7 @@ def test_ktau_metrics_on_a_known_trajectory() -> None:
     k_shape[0, :, 0] = radius
     trajectory = Trajectory(
         k_shape_per_m=k_shape,
+        gg_shape_T2s_per_m2=np.zeros((1, n, 3, 3)),
         adc_time_in_tr_s=tau + config.rf_center_s,
         time_since_excitation_s=tau,
         tr_index=np.arange(3),
