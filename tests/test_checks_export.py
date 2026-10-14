@@ -190,8 +190,8 @@ def test_spectrum_report(seq: pp.Sequence) -> None:
         spectrum_report(seq, [], acquired_time_range(SMALL, 4))
 
 
-def test_pns_report(seq: pp.Sequence) -> None:
-    report = pns_report(seq, safe_example_hw(), acquired_time_range(SMALL, 4))
+def test_pns_report(shapes: list[Shape], schedule: Schedule) -> None:
+    report = pns_report(SMALL, schedule, shapes, safe_example_hw())
     assert report["ok"]
     assert 0 < report["max_pns"] < 1
 
