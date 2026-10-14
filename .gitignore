@@ -4,3 +4,5 @@
 .envrc.local.*
 # One git worktree for each task (dev-workflow start-task)
 .worktrees/
+# Siemens gradient system files: confidential, never commit (data/README.md)
+data/*.asc
