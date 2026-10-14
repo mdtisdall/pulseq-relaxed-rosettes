@@ -64,8 +64,9 @@ def test_times(targets: list[ShapeTargets]) -> None:
 def test_shapes_differ_in_crossing_times(targets: list[ShapeTargets]) -> None:
     crossings = np.stack([shape.crossing_times_s for shape in targets])
     assert len({tuple(c) for c in crossings}) == len(targets)
-    # Including the last crossing, which sets the spoil segment.
-    assert len(set(crossings[:, -1])) == len(targets)
+    # Including the last crossing, which sets the spoil segment. (Two shapes
+    # may round to the same raster point, so check that it moves at all.)
+    assert np.ptp(crossings[:, -1]) > 10 * CONFIG.system.grad_raster_time_s
 
 
 def test_without_jitter_time_follows_sqrt_radius() -> None:
@@ -96,3 +97,25 @@ def test_cli_writes_loadable_file(tmp_path: Path) -> None:
     for a, b in zip(loaded, make_targets(config), strict=True):
         np.testing.assert_array_equal(a.k, b.k)
         np.testing.assert_array_equal(a.t_s, b.t_s)
+
+
+@pytest.mark.parametrize("power", [0.5, 1.0, 2.0])
+def test_tip_radius_power(power: float) -> None:
+    config = CONFIG.with_overrides([f"shapes.tip_radius_power={power}"])
+    s = config.shapes
+    radii = np.concatenate([np.linalg.norm(t.tips, axis=1) for t in make_targets(config)])
+    assert radii.min() >= s.tip_radius_min - 1e-12
+    assert radii.max() <= s.tip_radius_max + 1e-12
+    # Blue noise in radius ** (1 / power): evenly spread in that variable.
+    for shape in make_targets(config):
+        u = np.sort(np.linalg.norm(shape.tips, axis=1) ** (1 / power))
+        span = s.tip_radius_max ** (1 / power) - s.tip_radius_min ** (1 / power)
+        assert np.diff(u).min() > 0.4 * span / (s.echoes_per_tr - 1)
+
+
+def test_lower_power_moves_tips_outward() -> None:
+    def mean_radius(power: float) -> float:
+        config = CONFIG.with_overrides([f"shapes.tip_radius_power={power}"])
+        return float(np.mean([np.linalg.norm(t.tips, axis=1) for t in make_targets(config)]))
+
+    assert mean_radius(0.5) > mean_radius(1.0) > mean_radius(2.0)

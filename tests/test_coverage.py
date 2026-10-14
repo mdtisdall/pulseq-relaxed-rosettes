@@ -7,7 +7,7 @@ import pytest
 
 from relaxed_rosettes.cli import main
 from relaxed_rosettes.config import Config
-from relaxed_rosettes.coverage import CoverageGrid, window_metrics, window_samples
+from relaxed_rosettes.coverage import CoverageGrid, ktau_metrics, window_metrics, window_samples
 from relaxed_rosettes.optimize import optimize_shapes
 from relaxed_rosettes.sequence import make_schedule
 from relaxed_rosettes.trajectory import Trajectory, make_trajectory
@@ -110,3 +110,42 @@ def test_cli_coverage(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Non
     assert np.array(report["coverage"]).shape == (2, 2, 2)
     assert main([*args, "--starts", "2"]) == 0
     assert "gap:" in capsys.readouterr().out
+
+
+def test_ktau_metrics_on_a_known_trajectory() -> None:
+    """One shape whose |k| rises linearly with tau, from 0 to k_max."""
+    config = SMALL
+    n = 1000
+    tau = np.linspace(0.0, 10e-3, n, endpoint=False)
+    radius = np.linspace(0.0, config.k_max_per_m, n, endpoint=False)
+    k_shape = np.zeros((1, n, 3))
+    k_shape[0, :, 0] = radius
+    trajectory = Trajectory(
+        k_shape_per_m=k_shape,
+        adc_time_in_tr_s=tau + config.rf_center_s,
+        time_since_excitation_s=tau,
+        tr_index=np.arange(3),
+        tr_start_s=np.arange(3, dtype=np.float64) * config.readout.tr_s,
+        shape_index=np.zeros(3, dtype=np.int64),
+        rotation_matrix=np.broadcast_to(np.eye(3), (3, 3, 3)).copy(),
+        rf_phase_rad=np.zeros(3),
+    )
+    m = ktau_metrics(config, trajectory, shells=10, tau_bin_s=1e-3, early_s=2e-3)
+    # Shell i is reached only during tau bin i: the diagonal is full.
+    np.testing.assert_array_equal(m.counts, np.diag(np.full(10, 3 * 100)))
+    assert m.empty_fraction == pytest.approx(0.9)
+    assert m.empty_fraction_early == pytest.approx(0.9)
+    assert m.empty_fraction_outer_half == pytest.approx(0.9)
+    # Shell 0 is empty from 1 ms to 10 ms; shell 9 from 0 to 9 ms.
+    np.testing.assert_allclose(m.max_tau_gap_s[[0, 9]], [9e-3, 9e-3])
+    np.testing.assert_allclose(m.max_tau_gap_s[5], 5e-3)
+
+
+def test_ktau_more_shapes_fill_the_plane() -> None:
+    few = SMALL.with_overrides(["shapes.num_shapes=1"])
+    many = SMALL.with_overrides(["shapes.num_shapes=4"])
+    metrics = [
+        ktau_metrics(c, make_trajectory(c, make_schedule(c), optimize_shapes(c, jobs=1)))
+        for c in (few, many)
+    ]
+    assert metrics[1].empty_fraction < metrics[0].empty_fraction

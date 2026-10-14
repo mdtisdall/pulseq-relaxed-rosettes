@@ -22,7 +22,7 @@ from relaxed_rosettes.checks import (
     timing_report,
 )
 from relaxed_rosettes.config import Config, ConfigError
-from relaxed_rosettes.coverage import format_metrics, window_metrics
+from relaxed_rosettes.coverage import format_ktau, format_metrics, ktau_metrics, window_metrics
 from relaxed_rosettes.optimize import (
     Shape,
     ShapeOptimizationError,
@@ -210,9 +210,19 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         num_starts=args.starts,
         tau_bins=args.tau_bins,
     )
+    ktau = ktau_metrics(config, trajectory, shells=args.shells, tau_bin_s=args.tau_bin_ms * 1e-3)
     if args.json:
         report = {
             "config_digest": config.digest(),
+            "ktau": {
+                "shells": args.shells,
+                "tau_bin_s": ktau.tau_bin_s,
+                "empty_fraction": ktau.empty_fraction,
+                "empty_fraction_early": ktau.empty_fraction_early,
+                "early_s": ktau.early_s,
+                "empty_fraction_outer_half": ktau.empty_fraction_outer_half,
+                "max_tau_gap_s": ktau.max_tau_gap_s.tolist(),
+            },
             "windows_s": metrics.windows_s,
             "resolutions_m": metrics.resolutions_m.tolist(),
             "tau_bins": metrics.tau_bins,
@@ -223,6 +233,8 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2))
     else:
         print(format_metrics(metrics))
+        print()
+        print(format_ktau(ktau))
     return 0
 
 
@@ -316,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     coverage = commands.add_parser(
         "coverage",
-        help="k-space coverage and gaps of windows of scan time, by resolution",
+        help="k-space coverage of windows of scan time, and (|k|, tau) sampling",
     )
     coverage.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
     coverage.add_argument(
@@ -341,6 +353,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="report the worst of this many bins of time since excitation (default: 1)",
+    )
+    coverage.add_argument(
+        "--shells", type=int, default=20, help="|k| shells for the (|k|, tau) sampling"
+    )
+    coverage.add_argument(
+        "--tau-bin-ms",
+        type=float,
+        default=0.5,
+        help="tau bin width (ms) for the (|k|, tau) sampling (default: 0.5)",
     )
     coverage.add_argument("--json", action="store_true", help="print the metrics as JSON")
     coverage.set_defaults(func=_cmd_coverage)
