@@ -48,7 +48,23 @@ Build the `.seq` file from the optimized shapes:
 uv run relaxed-rosettes sequence shapes.npz -o relaxed_rosettes.seq
 ```
 
-Each TR is one block: a hard pulse with the gradients off, one shape rotated by a rotation event, and the ADC (none in the dummy TRs at the start). The rotations are a super-Fibonacci spiral on SO(3), split among the shapes, in shuffled order. Next to the `.seq` file, `relaxed_rosettes.npz` has the schedule of each TR: `shape_index`, `rotation_matrix` (physical gradient = R @ shape gradient), `rf_phase_rad` (also the ADC phase), `acquired`, and the config.
+Each TR is one block: a hard pulse with the gradients off, one shape rotated by a rotation event, and the ADC (none in the dummy TRs at the start). The rotations are a super-Fibonacci spiral on SO(3), split among the shapes, in shuffled order. Next to the `.seq` file, the design file `relaxed_rosettes.npz` has everything it was built from: the schedule of each TR (`shape_index`, `rotation_matrix` with physical gradient = R @ shape gradient, `rf_phase_rad` (also the ADC phase), `acquired`), the shape waveforms and targets, and the config. The other commands read it.
+
+Check the sequence:
+
+```
+uv run relaxed-rosettes check relaxed_rosettes.seq --asc MP_GPA_....asc --band 500:700
+```
+
+It reports pypulseq's timing check; the peak gradient and slew per physical axis over every TR; whether the ADC dwell meets Nyquist along the path at the peak gradient; the gradient spectrum peak and its level in each `--band` (Hz; e.g. the scanner's acoustic resonances); and, with the scanner's gradient `.asc` file, the peak PNS (SAFE model). The spectrum and PNS cover the first `--trs` acquired TRs (default 100). `--json` prints the report as JSON. It exits with status 1 if timing, Nyquist, or PNS fails.
+
+Export the k-space trajectory at the ADC samples, for reconstruction:
+
+```
+uv run relaxed-rosettes export-traj relaxed_rosettes.seq -o traj.npz
+```
+
+All acquired TRs sample the same times, and each plays one shape rotated, so the file is compact: `k_shape_per_m` (shapes × samples × 3, logical axes), `adc_time_in_tr_s` and `time_since_excitation_s` (samples), and for each acquired TR `tr_index`, `tr_start_s`, `shape_index`, `rotation_matrix`, and `rf_phase_rad`. The k-space position (1/m) of sample `s` in acquired TR `a` is `rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]`; `relaxed_rosettes.trajectory.load_trajectory(path)[1].k_per_m()` computes it for all (or some) TRs. Before writing, the export checks itself against pypulseq's k-space of the `.seq` file.
 
 ## Dependencies
 

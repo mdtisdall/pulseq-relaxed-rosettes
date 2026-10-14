@@ -14,7 +14,7 @@ from relaxed_rosettes.sequence import (
     Schedule,
     build_sequence,
     check_adc_segments,
-    load_schedule,
+    load_design,
     make_schedule,
 )
 from relaxed_rosettes.system import make_opts
@@ -138,7 +138,7 @@ def test_write_read_round_trip(tmp_path: Path, seq: pp.Sequence) -> None:
     np.testing.assert_allclose(k_read, k_original, atol=1e-3)
 
 
-def test_cli_writes_seq_and_schedule(tmp_path: Path) -> None:
+def test_cli_writes_seq_and_design(tmp_path: Path) -> None:
     config_path = tmp_path / "small.toml"
     config_path.write_text(SMALL.to_toml())
     shapes_path = tmp_path / "shapes.npz"
@@ -146,6 +146,7 @@ def test_cli_writes_seq_and_schedule(tmp_path: Path) -> None:
     assert main(["shapes", str(config_path), "-o", str(shapes_path), "--jobs", "1"]) == 0
     assert main(["sequence", str(shapes_path), "-o", str(seq_path)]) == 0
     assert seq_path.exists()
-    config, schedule = load_schedule(seq_path.with_suffix(".npz"))
+    config, schedule, shapes = load_design(seq_path.with_suffix(".npz"))
     assert config == SMALL
     np.testing.assert_array_equal(schedule.shape_index, make_schedule(SMALL).shape_index)
+    assert len(shapes) == SMALL.shapes.num_shapes
