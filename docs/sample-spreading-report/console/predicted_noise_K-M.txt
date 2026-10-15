@@ -1,0 +1,16 @@
+| design | samples | 8 mm | 6 mm | 4 mm | 3 mm | 2 mm | 1.5 mm | 1 mm |
+|---|---|---|---|---|---|---|---|---|
+| K filter base | 224000 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| L filter + rep initial | 224000 | 1.01 | 1.01 | 1.01 | 1.01 | 1.01 | 1.01 | 1.00 |
+| M filter + rep model | 224000 | 1.30 | 1.29 | 1.28 | 1.27 | 1.20 | 1.09 | 0.87 |
+| F hairpin (power) base | 224000 | 1.00 | 1.01 | 1.01 | 1.03 | 1.15 | 1.25 | 0.97 |
+| G hairpin + rep | 224000 | 1.00 | 1.02 | 1.01 | 1.04 | 1.15 | 1.26 | 0.97 |
+
+# Transcribed from the session console: weighted predicted noise with the filter prior
+# (64 log-spaced resolutions, 1-8 mm, equal weight per octave), relative to K.
+K filter base        1.000
+L + rep initial      1.002
+M + rep model        0.960
+F hairpin (power)    1.120
+G hairpin + rep      1.122
+# Mean slew energy: K 1829, L 2325, M 3003.

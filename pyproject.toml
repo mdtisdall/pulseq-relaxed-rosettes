@@ -31,7 +31,8 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 100
-extend-exclude = [".worktrees"]
+# Experiment scripts kept as they ran, as a record (docs/sample-spreading-report/README.md).
+extend-exclude = [".worktrees", "docs/sample-spreading-report/scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "NPY"]

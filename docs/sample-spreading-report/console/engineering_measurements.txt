@@ -1,0 +1,49 @@
+# Transcribed from the session console (one full-size shape, one process, under scripts/guard.sh).
+
+## scripts/sparse_k_compare.py, before PR #21 (k as cumsum(g))
+hairpin: 3.7 s, peak RSS so far 0.40 GB, slewE 1137.353
+relaxed: 8.9 s, peak RSS so far 0.62 GB, slewE 1033.628
+tube: 15.7 s, peak RSS so far 0.77 GB, slewE 1092.867
+
+## same, after PR #21 (sparse k variable)
+hairpin: 0.7 s, peak RSS so far 0.25 GB, slewE 1137.353
+relaxed: 1.7 s, peak RSS so far 0.29 GB, slewE 1033.628
+tube: 2.3 s, peak RSS so far 0.34 GB, slewE 1092.867
+hairpin max |dg| mT/m 4.71449546068925e-11 max |g| 23.164718834455766
+relaxed max |dg| mT/m 0.00020290735198358334 max |g| 23.081788849653382
+tube max |dg| mT/m 0.00013104245338801945 max |g| 23.129863664003686
+
+## scripts/bench_energy.py (energy and gradient, M = 14000, one thread)
+current, CHUNK 256: best 0.63 s, median 0.63 s
+current, CHUNK 512: best 0.64 s, median 0.65 s
+current, CHUNK 1024: best 0.64 s, median 0.65 s
+symmetric, block 256: best 0.40 s, median 0.40 s
+   |dF| 1.1e-16, max |dgrad| / max |grad| 1.7e-12
+symmetric, block 512: best 0.37 s, median 0.37 s
+   |dF| 2.8e-16, max |dgrad| / max |grad| 1.7e-12
+symmetric, block 1024: best 0.40 s, median 0.40 s
+   |dF| 1.1e-16, max |dgrad| / max |grad| 1.5e-12
+symmetric, block 2048: best 0.55 s, median 0.56 s
+   |dF| 0.0e+00, max |dgrad| / max |grad| 1.3e-12
+peak RSS 1.16 GB
+
+## scripts/blas_threads.py (Apple Accelerate)
+default:                  wall 0.66 s, cpu 0.66 s per call
+VECLIB_MAXIMUM_THREADS=1: wall 0.65 s, cpu 0.65 s per call
+
+## scripts/repel_one_shape.py, SCP problem compiled once with cvxpy Parameters (sparse k)
+step 1 solve 1.7 s, peak RSS 0.27 GB
+KILLED: RSS 12733344 KB > limit
+
+## same, problem built from constants at every step (as in PR #23; doubling rule at the time)
+step 1 solve 1.7 s, peak RSS 0.27 GB
+step 0: trust 2 cells, accepted True, F 0.334695, slewE 1057, solve 1.4 s
+step 1: trust 4 cells, accepted True, F 0.334302, slewE 1107, solve 1.7 s
+step 2: trust 8 cells, accepted True, F 0.334014, slewE 1219, solve 1.8 s
+step 3: trust 8 cells, accepted False, F 0.334014, slewE 1219, solve 1.9 s
+step 4: trust 4 cells, accepted True, F 0.333992, slewE 1148, solve 1.9 s
+total 11.2 s: solves 8.8 s, rest 2.4 s; peak RSS 0.38 GB
+max slew 100.0 T/m/s, target violation 4.7e-11
+
+## Before all of this: a 16-shape repulsion run with cvxpy Parameters and k as cumsum(g),
+## 5 workers, used about 350 GB and crashed the machine (reported by the user; no log survived).
