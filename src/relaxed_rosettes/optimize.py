@@ -26,6 +26,7 @@ It is solved with cvxpy and Clarabel.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import math
 import os
 import time
@@ -204,12 +205,39 @@ def band_matrix(config: Config, num_samples: int) -> FloatArray:
     return result
 
 
+BAND_BASIS_TOLERANCE = 1e-6
+"""``band_basis`` drops the directions whose band energy is below this
+fraction of the largest; each changes the band energy by at most that
+fraction of the waveform's energy."""
+
+
+@functools.lru_cache(maxsize=8)
+def band_basis(config: Config, num_samples: int) -> FloatArray:
+    """A matrix with the same ``||. @ x||^2`` as ``band_matrix``, up to
+    ``BAND_BASIS_TOLERANCE``, and far fewer rows.
+
+    The rows of ``band_matrix`` oversample the bands, so they are nearly
+    dependent: a signal of duration T in bands of total width W has only
+    about 2 W T independent directions (its discrete prolate spheroidal, or
+    Slepian, sequences). With ``B = U S V^T``, ``||B x||^2 = ||S V^T x||^2``;
+    this keeps the rows of ``S V^T`` with ``s^2 >= BAND_BASIS_TOLERANCE * max s^2``.
+    The optimizer's dense cost grows with the square of the row count.
+    """
+    band = band_matrix(config, num_samples)
+    if not len(band):
+        return band
+    _, s, vt = np.linalg.svd(band, full_matrices=False)
+    keep = s**2 >= BAND_BASIS_TOLERANCE * float(s.max()) ** 2
+    result: FloatArray = s[keep, None] * vt[keep]
+    return result
+
+
 def gradient_cost(config: Config, g: cp.Expression) -> cp.Expression:
     """The optimizer's objective for a waveform ``g`` (raster points, 3): the slew
     energy, plus ``band_penalty_weight`` times the slew energy in the bands."""
     slew = g[1:] - g[:-1]
     cost = cp.sum_squares(slew)
-    band = band_matrix(config, g.shape[0] - 1)
+    band = band_basis(config, g.shape[0] - 1)
     if len(band) and config.gradients.band_penalty_weight > 0:
         cost = cost + config.gradients.band_penalty_weight * cp.sum_squares(band @ slew)
     return cost
@@ -219,7 +247,7 @@ def gradient_cost_value(config: Config, g: FloatArray) -> float:
     """``gradient_cost`` of a numeric waveform."""
     slew = np.diff(g, axis=0)
     cost = float(np.sum(slew**2))
-    band = band_matrix(config, len(slew))
+    band = band_basis(config, len(slew))
     if len(band) and config.gradients.band_penalty_weight > 0:
         cost += config.gradients.band_penalty_weight * float(np.sum((band @ slew) ** 2))
     return cost

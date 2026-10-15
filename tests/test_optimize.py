@@ -16,6 +16,7 @@ from relaxed_rosettes.optimize import (
     _optimize_one,
     _Work,
     adc_samples,
+    band_basis,
     band_frequencies,
     band_matrix,
     calibrated_petal_time_factor,
@@ -171,6 +172,17 @@ def test_band_matrix_is_parseval() -> None:
     nyquist_energy = np.sum(x * (-1.0) ** np.arange(len(x))) ** 2 / m
     energy = np.sum((band_matrix(config, len(x)) @ x) ** 2)
     assert energy == pytest.approx(np.sum(x**2) - nyquist_energy, rel=1e-9)
+
+
+def test_band_basis_keeps_the_band_energy() -> None:
+    config = SMALL.with_overrides(["gradients.penalty_bands_hz=[[500, 600], [1000, 1100]]"])
+    n = SMALL.raster_points_per_tr - 1
+    full, basis = band_matrix(config, n), band_basis(config, n)
+    assert len(basis) < len(full)
+    x = np.random.default_rng(2).standard_normal((n, 3))
+    error = np.sum((full @ x) ** 2) - np.sum((basis @ x) ** 2)
+    # Each dropped direction is below the tolerance times the largest.
+    assert 0 <= error <= 1e-6 * float(np.sum(x**2))
 
 
 def test_band_frequencies_cover_each_band() -> None:
