@@ -1,6 +1,6 @@
 # Testing the scan-time basis on a static phantom
 
-Status: plan; nothing here is implemented yet. It uses the minimal real-data scan (design A) that already checks the static reconstruction. Record the measured results in section 7, in the same PR as each step, and correct the text where the plan was wrong.
+Status: plan; nothing here is implemented yet. It uses the minimal real-data scan (design P4, formerly called design A) that also checks the static reconstruction, and adds a second, full-resolution design (P1) and a trajectory check to that session (section 2). Record the measured results in section 8, in the same PR as each step, and correct the text where the plan was wrong.
 
 ## Question
 
@@ -22,11 +22,41 @@ Measured on a 128-shape export (scale-free, so it holds for any resolution): the
 
 ## 2. Data
 
-- **Scan:** design A (4 mm, TR 40 ms, 10000 ADC samples in 2 segments, 1500 TRs, about 60 s), the phantom with the marker vial, as already planned for the static reconstruction check. The noise scan gives the noise covariance for the noise floor in section 4.
-- **Longer repeat (optional):** the same design with about 5000 TRs (about 200 s). Drift from gradient heating grows over minutes. A longer scan shows whether drift needs more than one or two components.
-- **Design settings to record:** `crossing_tolerance_cells` and `tip_width`. With a crossing tolerance above 0, the crossings pass up to that distance from $k = 0$, in a direction that rotates with the TR. That is a rotation-dependent offset by design, and candidate A must then be judged with it in mind.
+### 2.1 The session
 
-## 3. Candidates
+One session on the phantom with the marker vial: localizer, product 3D GRE (the reference for the static reconstruction), the noise scan, then the two Pulseq designs below. The noise scan gives the noise covariance for the noise floor in section 5.
+
+### 2.2 The designs
+
+Both are plain hairpins, so that every crossing passes exactly through $k = 0$ and every tip is exactly at its target. That makes the crossing navigator (candidate A) free of rotation-dependent offsets by design, and the trajectory check (section 3) clean to interpret. Relaxed targets and repulsion change the coverage by 10–25% at most (`docs/sample-spreading-report.md`), which matters little for a correctness test, and they would add uncertainty about where the path is. So, in both:
+
+- `shapes.crossing_tolerance_cells = 0`, `shapes.tip_width = 0`, `shapes.tip_relinearizations = 0`, `shapes.tube_cells = 0`, `shapes.repulsion_iterations = 0` (all the defaults);
+- `shapes.tip_density = "power"` (the default), and the default seed, FOV (256 mm) and gradient limits.
+
+| design | role | overrides of the default config | ADC | scan time |
+|---|---|---|---|---|
+| **P4** | first scan: correctness of the sequence and the reconstruction with gentle gradients; the data of the basis test | `geometry.resolution_m=0.004`, `readout.tr_s=0.04`, `readout.adc_num_samples=10000`, `scan.num_trs=1500` | 10 000 samples in 2 segments (limit 8192) | about 60 s |
+| **P1** | second scan: correctness at the gradient demand of the designs that will be used (full amplitude, 100 T/m/s) | `scan.num_trs=1500` | 14 000 samples in 2 segments | about 75 s |
+
+Build each with `relaxed-rosettes shapes --set …`, `sequence` and `check` (README), and commit its config as a TOML file with the analysis code, so the scanned design is exactly reproducible.
+
+- **P4** has short petals: they reach only $k_{max}/4$ of the 1 mm design, so its peak $|g|$ is about half. It is the easier scan to debug, but it is less sensitive to gradient delays and eddy currents, because a delay $\delta$ shifts $k$ by $\gamma g \delta$.
+- **P1** is the default 1 mm design. Reconstruct it at 4 mm (the samples inside the 4 mm ball) against the same GRE reference, then at 2 mm. With the real gradients, a 5 µs delay at 28 mT/m shifts $k$ by about 1.5 cells, which is visible even in a 4 mm reconstruction. P1 tests whether the correctness established with P4 holds for the designs that will be used.
+- **Longer repeat (optional):** P4 with about 5000 TRs (about 200 s). Drift from gradient heating grows over minutes. A longer scan shows whether drift needs more than one or two components.
+
+## 3. Trajectory check
+
+Before judging either reconstruction, estimate the gradient delays from the data, so that a failure can be assigned to the trajectory or to the reconstruction.
+
+- **Model.** A delay $\delta_i$ on physical axis $i$ moves $k$ at a crossing by $-\gamma D g$, with $D = 	ext{diag}(\delta_x, \delta_y, \delta_z)$ and $g = R\, g_{shape}$ the physical gradient there. To first order, the echo then peaks later by $\Delta t = g^	op D g / \lVert g 
+Vert^2 = \sum_i \delta_i\, g_i^2 / \lVert g 
+Vert^2$, which is linear in $\delta$, with weights that change with the rotation of the TR.
+- **Measurement.** For each crossing of each TR, the time of the peak of the coil-combined magnitude, to a fraction of a dwell (a parabola through the samples around the maximum), minus the nominal crossing time.
+- **Fit.** Least squares for $\delta_x, \delta_y, \delta_z$ over all crossings and TRs, with their uncertainties. Report also the residual miss distance perpendicular to $g$, $\gamma \lVert D g - (\hat g^	op D g)\, \hat g 
+Vert$, in cells: a delay that a time shift cannot absorb.
+- **Use.** Fit on P4 and on P1. Delays should agree between the two designs; if they do not, the model is incomplete (eddy currents), and a gradient impulse response is the next step. If the delays shift $k$ by more than a threshold at the peak gradient of P1 (proposed: 0.1 cell; fix it before the scan), correct the trajectory with them before the reconstruction.
+
+## 4. Candidates
 
 ### A. Samples near k = 0 (free)
 
@@ -42,7 +72,7 @@ Grid non-overlapping windows of $W$ TRs at 8 mm ($n$ = 32) with the existing gri
 
 The same short trajectory, at the same $\tau$, in every shape, sampling a small ball around $k = 0$ completely. Its size and its cost in imaging time are a design question for the shape optimizer and `coverage`; it needs a new scan, so it is a second phase of this test.
 
-## 4. Metrics
+## 5. Metrics
 
 For each candidate's navigator matrix:
 
@@ -56,27 +86,28 @@ For each candidate's navigator matrix:
    Report the fraction of each component's variance explained by each group. Drift is real and stays in the basis; shape, rotation and $\tau$ terms are contamination.
 3. **Detection (positive control, by simulation).** Take the time-averaged CG-SENSE image, coil maps and field map of the phantom. Multiply the marker vial by $1 + a\,m(T)$, with $m$ a 0.05 Hz sinusoid plus a step at mid-scan. Generate data with the forward operator (`SenseOperator`) at the measured noise level, and run each candidate on it. Report the smallest $a$ (try 0.5%, 1%, 2%, 5%) at which the recovered basis spans $m$ (the correlation between $m$ and its projection onto the basis above 0.9).
 
-## 5. Decision rule
+## 6. Decision rule
 
 Set the thresholds before looking at the data:
 
 - A candidate **passes** if, in every component above the noise edge, shape, rotation and $\tau$ terms together explain less than 10% of the variance, and the simulated modulation is detected at $a \le 2\%$.
 - **A passes:** take the basis from the crossings. No navigator; no pre-reconstruction.
 - **Only B passes:** take the basis from the pre-reconstruction, at the smallest $W$ that passes. This sets the finest temporal resolution of the basis.
-- **Neither passes:** design candidate C, measure its cost with `coverage`, and repeat the test on a new design A scan with it.
+- **Neither passes:** design candidate C, measure its cost with `coverage`, and repeat the test on a new P4 scan with it.
 
-If contamination is found, its attribution says where it comes from. Rotation terms in candidate A point at gradient delays or eddy currents, which move the real crossings away from $k = 0$ by a fraction of a cell in a direction that rotates with the TR. They would also corrupt the trajectory of the static reconstruction, so they are worth knowing about either way.
+If contamination is found, its attribution says where it comes from. Rotation terms in candidate A point at gradient delays or eddy currents, which move the real crossings away from $k = 0$ by a fraction of a cell in a direction that rotates with the TR. The trajectory check (section 3) measures the delays directly; compare the two. Use the delay-corrected trajectory for candidates A and B when section 3 calls for a correction.
 
-## 6. Implementation
+## 7. Implementation
 
 Small steps, each with tests on simulated data:
 
+0. **Delay estimate:** a function in `relaxed_rosettes.recon` that finds the echo peak of each crossing in the ISMRMRD data and fits the per-axis delays of section 3 (tested on data simulated with known delays), and an option to apply them to the exported trajectory.
 1. **Crossing navigator:** a function in `relaxed_rosettes.recon` that selects the samples within $\varepsilon$ of $k = 0$ for each shape, reads them for every TR from the ISMRMRD data, whitens them, and interpolates them onto the common $\tau$ grid.
 2. **Window navigator:** windows of TRs for `Selection`, and gridding of each window, reusing `gridding` and the time-averaged coil maps.
 3. **Analysis:** SVD, noise edge, regressions and the simulated modulation, written to an `.npz` file (no plotting in this package), through a CLI command (for example `relaxed-rosettes basis-test`).
 
-The phantom data and its results stay out of the repository; the code and this plan go through PRs as usual.
+The phantom data and its results stay out of the repository; the code, the configs of P4 and P1, and this plan go through PRs as usual.
 
-## 7. Results
+## 8. Results
 
 Not run yet.
