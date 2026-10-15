@@ -101,12 +101,13 @@ with the priorities $\alpha$ of the requirements, swept over $\mu$ to trace the 
 | relaxation 4D (whole scan) | that every radius is sampled in every τ group: a property of the $(\lvert k \rvert, \tau)$ distribution, which rotations cannot change; it can hold over the library, with shapes whose petal orders in τ complement each other | the angular fill of each τ group over the whole scan (a global term) |
 | static (whole scan, about 600 TRs to fill) | the radial density, and no $\lvert k \rvert$–τ correlation (again over the library) | the angular fill over the whole scan, and the early-stop property (section 5) |
 | cost (slew energy) | all of it: slew energy does not change under rotation | none; PNS and acoustics depend somewhat on which gradient axis carries the slew |
+| spoiling (section 5.1) | the size of the spoil moment, and its direction relative to the shape's petals | the direction of each TR's spoil moment, so where the spoiled magnetization of every earlier TR lies when the next readouts sample k-space |
 
 By window length: windows of about one TR (navigator) are set by the shapes; windows of a few to tens of TRs (BOLD) by the shapes in radius and τ and by the schedule in direction and T; whole-scan windows (static, relaxation 4D) by the library in radius and τ and by the schedule in angular fill.
 
 **Consequences.**
 
-1. **The cost axis of the front is a shape problem.** The schedule improves coverage at no slew cost, so optimizing it moves designs toward the front for free. This argues for doing the schedule first.
+1. **The cost axis of the front is a shape problem.** The schedule improves coverage at no slew cost, so optimizing it moves designs toward the front for free. This argues for doing the schedule first. It is not free in spoiling, though: the rotation that places a TR's samples also places its spoiled magnetization (section 5.1).
 2. **The shape objective gets only the terms the shapes control:** the coverage terms on $(\lvert k \rvert, \tau)$, the coarse angular coverage of each shape for the navigator, and slew energy. Within-shape repulsion at fine scales is of little use, since fine angular fill comes from the schedule; this agrees with the report's finding that only coarse scales (4–8 mm) are reachable within one shape.
 3. **Some requirements belong to the library, not to single shapes:** the $(\lvert k \rvert, \tau)$ coverage for relaxation 4D and the no-correlation condition for the static image hold over a set of shapes. So the library is designed as a set. A window short enough to contain only a few shapes (BOLD's 10 TRs) sees only part of that complementarity, so the schedule should also mix the shapes in time. The schedule's choice of how often to use each shape feeds back into the radial density.
 
@@ -133,6 +134,38 @@ Scoring a candidate is then a lookup of its samples in the grids; subsampling ca
 2. **Myopia.** Late TRs have only small holes to fill, and greedy never revisits a choice. A final swap pass could improve the full scan at some cost to the prefixes.
 3. **The schedule partly sets the density** through how often it uses each shape; check the coverage curves.
 4. **The gain may not show in measure 3.** An earlier measurement (plan, section 4.2) found that TR order did not change the median gaps. The gains to expect are in prefix quality, the k–T spectrum and conditioning.
+
+### 5.1 Spoiling: the rotation also places the spoiled magnetization
+
+**How the sequence spoils.** Each shape ends at its spoil moment, $5\,k_{max}$ (`spoil_moment_kmax`) along a direction fixed relative to its petals, and the TR's rotation turns the whole waveform, spoiler included. So TR $p$ leaves its transverse magnetization dephased by $s_p = R_p\, m_{\text{shape}(p)}$, a vector of length $5\,k_{max}$ whose direction the schedule chooses. RF spoiling adds a phase to each excitation (`excitation.rf_phase`: random by default, or the quadratic 117° scheme).
+
+**Where the spoiled energy goes.** Later pulses split that magnetization into coherence pathways (an extended phase graph in 3D, with continuous dephasing vectors instead of integer states). A pathway that reaches TR $q$ has net dephasing
+
+$$
+M \;=\; \sum_{i=p}^{q-1} \varepsilon_i\, R_i\, m_{\text{shape}(i)}, \qquad \varepsilon_i \in \{+1, -1, 0\},
+$$
+
+with $+1$ for a TR spent transverse, $-1$ after a pulse conjugates it (spin-echo-like), and $0$ while it is stored longitudinally (stimulated echoes). During the readout of TR $q$ its signal is the object's spectrum at $M + k_q(t)$. So it is sampled, as a spurious echo, when the readout passes near $-M$: in practice when $\lvert M \rvert$ is less than about $k_{max}$ plus the few cells over which the object's spectrum is still strong. A single TR's spoiler ($5\,k_{max}$) is far outside the readout ball. Sums over several TRs are not: they are a random walk of $5\,k_{max}$ steps in directions that the schedule chooses, and a walk can return near the origin.
+
+**The pathways that matter**, at the defaults (flip angle 15°, TR 50 ms):
+
+- **Transverse chains** ($\varepsilon = +1$ throughout): each pulse keeps $\cos^2(\alpha/2) \approx 0.98$ of the coherence, and T2 and intravoxel dephasing reduce it by roughly half or more per TR. Strong, but short-lived: 1–3 TRs. Two consecutive TRs return to the ball if their spoilers are nearly antiparallel ($\lvert u_p + u_{p+1} \rvert < 0.2$, an angle above about 168°): about 1% of pairs for independent random directions.
+- **Conjugated pathways** ($\varepsilon$ changes sign): weighted by $\sin^2(\alpha/2) \approx 0.02$ per conjugation. Two TRs return if their spoilers are nearly parallel (within about 11°), again about 1% of random pairs.
+- **Stimulated echoes** (with $\varepsilon = 0$ stretches): each conversion between transverse and longitudinal costs a factor of order $\sin\alpha$, but storage decays only with T1 (about 4% per TR), so these last tens of TRs, and there are many of them.
+
+**Why incoherent spoiling may not carry over.** In 3D gradient-echo imaging with incoherent spoiling, the spoiler directions are independent of the imaging and effectively random: the returns near the origin are rare, uncorrelated, and, with RF spoiling, add incoherently. Here the directions are not independent of the imaging. The schedule chooses each rotation to place the samples (section 5), so the spoiler directions inherit the schedule's structure:
+
+- a greedy coverage objective is blind to spoiling, and can choose consecutive rotations whose spoilers are nearly parallel or antiparallel;
+- quasi-periodic greedy sequences and cycled roles (section 6.1) make the spoiler sequence periodic, so returns near the origin can repeat at a fixed period: coherent spurious signal, and for BOLD a periodic fluctuation (section 2);
+- the 117° quadratic RF scheme is designed for a constant spoiler direction; with rotating spoilers its benefit is not established, and the random scheme makes residual pathways add incoherently but varies the steady state from TR to TR.
+
+**Effect on the requirements.** Spurious pathways bias every reconstruction, with different signatures: for the static image, a contrast change and incoherent artefact; for relaxation 4D, pathways whose τ dependence is not the FID's (stimulated echoes do not decay with T2\* in the same way), so they corrupt the relaxation fit; for BOLD, a fluctuation over T that follows the schedule, which must stay out of the band, like the sampling variation of section 2.
+
+**What to add to the design.**
+
+- **A spoiling term in the schedule's objective.** Keep the low-order pathways (transverse chains over the last few TRs, conjugated pairs, and stimulated echoes with one storage period over the last tens of TRs) as a list of dephasing vectors with estimated amplitudes. For a candidate rotation, update them with its spoiler and score the amplitude-weighted energy of those that fall near the readout ball, for example $\sum a\, S(\lvert M \rvert - k_{max})$ with $S$ a model of the object's spectral decay. This is O(pathways) per candidate, cheap beside the coverage lookup. A hard constraint is the simpler alternative: no transverse chain of up to 3 TRs and no conjugated pair within a margin of the ball.
+- **Spoiler parameters in the shape design.** The size of the spoil moment trades slew energy (the cost axis) against how far the walk must go to return. Its direction relative to the petals is a free parameter of each shape; a library with varied spoiler directions gives the schedule rotations that are good for both coverage and spoiling.
+- **The RF phase scheme**, chosen with the schedule, by simulation (experiment 8).
 
 ## 6. The shapes
 
@@ -230,7 +263,11 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
    - Setup: the phantom with cardiac and respiratory components; roles cycled at 2 Hz, roles with the order jittered between cycles, the greedy schedule, and the shuffle. Score with the k–T spectrum in the band; if affordable, the continuous-T BOLD reconstruction and the false signal in the band.
    - Decision: whether roles need jitter, and what jitter costs in completeness.
 
-**Order.** Experiment 1 first, because 2, 4 and 5 optimize the frame potential. Experiments 2 and 3 are cheap and independent and can run beside 1. Experiment 4 needs only the evaluator; 5–7 need the τ basis and the phantom. If 1–5 leave a gap, alternate shapes and schedule (section 6).
+8. **Spoiling of a schedule.** Tests section 5.1: does a schedule optimized for coverage spoil as well as incoherent spoiling does?
+   - Setup: schedules from the shuffle, greedy coverage, greedy with the spoiling term, and roles; RF phase random and quadratic 117°. (a) Pathway analysis: the distribution of $\lvert M \rvert$ of the low-order pathways, and how often and with what amplitude they fall within the readout ball. (b) Simulation: the analytic phantom (section 7.1) gives the object's spectrum at any $k$, so the spurious signal of each pathway, its amplitude times the phantom signal at $M + k_q(t)$, can be added to a simulated scan exactly; reconstruct and measure the artefact, the steady-state fluctuation over T, and its spectrum in the BOLD band. An isochromat (Bloch) simulation of one voxel checks the pathway truncation.
+   - Decision: whether the spoiling term (or constraint) is needed, the spoil moment size, and the RF phase scheme.
+
+**Order.** Experiment 1 first, because 2, 4 and 5 optimize the frame potential. Experiments 2 and 3 are cheap and independent and can run beside 1. Experiment 4 needs only the evaluator; 5–7 need the τ basis and the phantom. Experiment 8(a) needs only the schedules, so it can run with experiment 4; 8(b) needs the phantom and the pathway simulation. If 1–5 leave a gap, alternate shapes and schedule (section 6).
 
 ## 8. Decisions
 
@@ -242,4 +279,4 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 
 ## 9. Conclusion
 
-Not reached. The direction so far: design the schedule greedily against the frame potentials of the requirements' reconstructions, then design the shapes for the $(\lvert k \rvert, \tau)$ terms and slew energy as $m$ complementary roles that the schedule cycles through, so that every window of $m$ TRs is complete, probably with tens of shapes rather than 128. The experiments of section 7 decide whether that holds.
+Not reached. The direction so far: design the schedule greedily against the frame potentials of the requirements' reconstructions and a spoiling term (section 5.1), then design the shapes for the $(\lvert k \rvert, \tau)$ terms and slew energy as $m$ complementary roles that the schedule cycles through, so that every window of $m$ TRs is complete, probably with tens of shapes rather than 128. The experiments of section 7 decide whether that holds.
