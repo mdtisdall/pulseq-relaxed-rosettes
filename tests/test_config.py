@@ -29,6 +29,14 @@ def test_partial_file_takes_defaults(tmp_path: Path) -> None:
     assert config.raster_points_per_tr == 2500
 
 
+def test_penalty_bands_round_trip() -> None:
+    config = Config().with_overrides(["gradients.penalty_bands_hz=[[500, 600], [1000.5, 1200]]"])
+    assert config.gradients.penalty_bands_hz == ((500.0, 600.0), (1000.5, 1200.0))
+    again = Config.from_toml(config.to_toml())
+    assert again == config
+    assert again.digest() == config.digest()
+
+
 def test_digest_changes_with_values() -> None:
     assert Config().digest() != Config().with_overrides(["seed=1"]).digest()
 
@@ -47,6 +55,8 @@ def test_int_accepted_for_float() -> None:
         ("[readout]\nadc_num_samples = 1.5\n", "wrong type"),
         ("[excitation]\nrf_phase = 'linear'\n", "must be one of"),
         ("readout = 3\n", "must be a table"),
+        ("[gradients]\npenalty_bands_hz = [500, 600]\n", "pairs"),
+        ("[gradients]\npenalty_bands_hz = [[500, 'a']]\n", "wrong type"),
         ("[readout\n", "invalid TOML"),
     ],
 )
@@ -64,6 +74,10 @@ def test_bad_files_rejected(toml: str, message: str) -> None:
         ("readout.adc_num_samples=20000", "exceeds tr_s"),
         ("readout.tr_s=0.050005", "whole number"),
         ("shapes.tip_radius_min=0", "tip_radius_min"),
+        ("gradients.penalty_bands_hz=[[600, 500]]", "penalty_bands_hz"),
+        ("gradients.penalty_bands_hz=[[500, 60000]]", "penalty_bands_hz"),
+        ("gradients.band_penalty_weight=-1", "band_penalty_weight"),
+        ("gradients.penalty_band_margin_hz=-1", "penalty_band_margin_hz"),
         ("readout.tr_s=-1", "must be > 0"),
         ("shapes.crossing_tolerance_cells=-1", "crossing_tolerance_cells must be >= 0"),
         ("shapes.tip_width=1.0", "tip_width must be < 1"),

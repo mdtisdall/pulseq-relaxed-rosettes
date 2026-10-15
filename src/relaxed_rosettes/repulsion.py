@@ -20,13 +20,16 @@ The samples are linear in the waveform, ``x = x(g)`` (``SampleOperator``,
 exact). From a feasible waveform ``g``, each step of sequential convex
 programming solves
 
-    min  lam * grad F(x(g))^T x(g') + sum_i |g'_{i+1} - g'_i|^2
+    min  lam * grad F(x(g))^T x(g') + cost(g')
 
 subject to every constraint of the solved shape (``waveform_constraints``,
 and ``|k| <= 1`` in the ADC, or the hairpin's largest |k| if that is more)
 and a trust region ``|k(g') - k(g)| <= delta``
-at every gradient sample in the ADC. Every iterate is a feasible waveform.
-The step is accepted when the merit ``lam * F + slew energy`` falls by at
+at every gradient sample in the ADC. ``cost`` is the optimizer's objective
+(``gradient_cost``: slew energy, plus the band penalty if the config has
+penalty bands), so repulsion does not undo the band penalty. Every iterate
+is a feasible waveform. The step is accepted when the merit
+``lam * F + cost`` falls by at
 least ``ACCEPT_RATIO`` of the decrease that the linear model predicts. The
 trust region follows the ratio of actual to predicted decrease: it halves
 below ``SHRINK_RATIO`` (or when the solve fails), doubles above
@@ -55,6 +58,8 @@ from relaxed_rosettes.optimize import (
     Shape,
     adc_samples,
     cells_to_kmax,
+    gradient_cost,
+    gradient_cost_value,
     kmax_per_mT_per_m_raster,
     relaxed,
     sample_kspace,
@@ -235,7 +240,7 @@ def _scp_step(
     ball: float,
 ) -> FloatArray | None:
     """One SCP subproblem from the waveform ``g``: minimize
-    ``linear_k . k + linear_g . g' + slew energy`` subject to the solved
+    ``linear_k . k + linear_g . g' + cost`` subject to the solved
     shape's constraints, ``|k| <= ball`` in the ADC, and the trust region.
     None if the solver fails or ends ``optimal_inaccurate`` (which happens
     at large trust regions), since that waveform may miss a constraint.
@@ -262,7 +267,7 @@ def _scp_step(
     objective = (
         cp.sum(cp.multiply(linear_k, k))
         + cp.sum(cp.multiply(linear_g, variable))
-        + cp.sum_squares(variable[1:] - variable[:-1])
+        + gradient_cost(config, variable)
     )
     problem = cp.Problem(cp.Minimize(objective), constraints)
     try:
@@ -289,16 +294,16 @@ def repel_shape(config: Config, shape: Shape) -> tuple[Shape, list[RepulsionStep
     target = repulsion_target(config, x)
     f, grad = energy(x, target)
     delta_cells = s.repulsion_trust_cells
-    # A full first step along the energy gradient is worth about the slew energy.
+    # A full first step along the energy gradient is worth about the cost.
     lam = (
         s.repulsion_weight
-        * slew_energy(g)
+        * gradient_cost_value(config, g)
         / (np.abs(grad).sum() * cells_to_kmax(config, delta_cells))
     )
     # The hairpin can pass slightly beyond k_max between its targets.
     ball = max(1.0, float(np.linalg.norm(sample_kspace(config, g)[adc], axis=1).max()))
 
-    merit = lam * f + slew_energy(g)
+    merit = lam * f + gradient_cost_value(config, g)
     history: list[RepulsionStep] = []
     start = time.perf_counter()
     for _ in range(s.repulsion_iterations):
@@ -321,10 +326,11 @@ def repel_shape(config: Config, shape: Shape) -> tuple[Shape, list[RepulsionStep
         if candidate is not None:
             x_new = samples(config, candidate)
             predicted = merit - (
-                lam * (f + float(np.sum(grad * (x_new - x)))) + slew_energy(candidate)
+                lam * (f + float(np.sum(grad * (x_new - x))))
+                + gradient_cost_value(config, candidate)
             )
             f_new, grad_new = energy(x_new, target)
-            merit_new = lam * f_new + slew_energy(candidate)
+            merit_new = lam * f_new + gradient_cost_value(config, candidate)
             ratio = (merit - merit_new) / predicted if predicted > 0 else math.nan
             accepted = bool(predicted > 0 and ratio >= ACCEPT_RATIO)
             if accepted:

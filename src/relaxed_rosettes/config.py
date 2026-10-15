@@ -91,12 +91,25 @@ class GradientConfig:
     The boundary windows are the first and last ``boundary_duration_s`` of the
     gradient waveform in each TR. There the slew is limited to
     ``boundary_slew_T_per_m_per_s`` for quieter transitions around the RF pulse.
+
+    ``penalty_bands_hz`` are frequency bands, ``[[low, high], ...]`` in Hz, to
+    keep out of the gradient spectrum, such as the coil's acoustic
+    resonances (``relaxed-rosettes shapes --asc`` reads them from the
+    gradient system file). The optimizer weights the slew energy at these
+    frequencies, each band widened by ``penalty_band_margin_hz`` on both
+    sides, ``1 + band_penalty_weight`` times as much as elsewhere. The margin
+    covers the spread of a spectrum measured over a short window: the
+    gradient spectrum of ``relaxed-rosettes check`` (pypulseq, 50 ms Hann
+    windows) spreads each frequency over about +-40 Hz.
     """
 
     max_grad_mT_per_m: float = 28.0
     max_slew_T_per_m_per_s: float = 100.0
     boundary_slew_T_per_m_per_s: float = 25.0
     boundary_duration_s: float = 1e-3
+    penalty_bands_hz: tuple[tuple[float, float], ...] = ()
+    band_penalty_weight: float = 100.0
+    penalty_band_margin_hz: float = 50.0
 
 
 @dataclass(frozen=True)
@@ -377,7 +390,9 @@ def _section_from_dict(name: str, cls: type, values: dict[str, Any]) -> Any:
     for key, value in values.items():
         default = getattr(cls(), key)
         label = f"{name}.{key}"
-        if isinstance(default, StrEnum):
+        if isinstance(default, tuple):
+            kwargs[key] = _bands(label, value)
+        elif isinstance(default, StrEnum):
             try:
                 kwargs[key] = type(default)(value)
             except ValueError:
@@ -388,6 +403,20 @@ def _section_from_dict(name: str, cls: type, values: dict[str, Any]) -> Any:
         else:
             kwargs[key] = float(_check_type(label, value, (int, float)))
     return cls(**kwargs)
+
+
+def _bands(label: str, value: Any) -> tuple[tuple[float, float], ...]:
+    """A list of ``[low, high]`` pairs of numbers, as a tuple of float pairs."""
+    message = f"{label} must be a list of [low, high] pairs: {value!r}"
+    if not isinstance(value, (list, tuple)):
+        raise ConfigError(message)
+    bands = []
+    for band in value:
+        if not isinstance(band, (list, tuple)) or len(band) != 2:
+            raise ConfigError(message)
+        low, high = (float(_check_type(label, v, (int, float))) for v in band)
+        bands.append((low, high))
+    return tuple(bands)
 
 
 def _check_type(label: str, value: Any, types: type | tuple[type, ...]) -> Any:
@@ -415,6 +444,8 @@ def _toml_value(value: Any) -> str:
         return json.dumps(value)
     if isinstance(value, float):
         return repr(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
     return str(value)
 
 
@@ -455,6 +486,17 @@ def _validate(c: Config) -> list[str]:
         errors.append("gradients.boundary_slew_T_per_m_per_s exceeds max_slew_T_per_m_per_s")
     if g.boundary_duration_s < 0 or 2 * g.boundary_duration_s >= r.tr_s:
         errors.append("gradients.boundary_duration_s must be in [0, tr_s / 2)")
+    nyquist = 0.5 / s.grad_raster_time_s
+    for low, high in g.penalty_bands_hz:
+        if not 0 <= low < high <= nyquist:
+            errors.append(
+                f"gradients.penalty_bands_hz: band [{low:g}, {high:g}] is not "
+                f"0 <= low < high <= {nyquist:g} Hz"
+            )
+    if g.band_penalty_weight < 0:
+        errors.append("gradients.band_penalty_weight must be >= 0")
+    if g.penalty_band_margin_hz < 0:
+        errors.append("gradients.penalty_band_margin_hz must be >= 0")
     if not 0 < sh.tip_radius_min < sh.tip_radius_max <= 1:
         errors.append("need 0 < shapes.tip_radius_min < shapes.tip_radius_max <= 1")
     if not -1 < sh.max_consecutive_tip_dot <= 1:

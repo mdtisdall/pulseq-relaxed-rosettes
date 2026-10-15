@@ -5,7 +5,9 @@ on the gradient raster. It is played as a pypulseq arbitrary gradient: sample
 ``i`` at time ``(i + 0.5) * raster`` from the start of the TR block, linearly
 interpolated, with ``first = last = 0`` at times 0 and ``N * raster``.
 
-The waveform minimizes slew energy subject to:
+The waveform minimizes slew energy, with the slew energy in the penalty
+bands (``GradientConfig.penalty_bands_hz``) weighted ``1 + band_penalty_weight``
+times (``gradient_cost``), subject to:
 
 - g = 0 from the start of the block to the end of the RF pulse (the
   excitation is played with the gradients off), and at the end of the TR;
@@ -16,7 +18,8 @@ The waveform minimizes slew energy subject to:
   |k| <= k_max during the ADC.
 
 All constraints are linear or second-order cone constraints, and the objective
-is convex quadratic, so each shape is a convex problem with a unique optimum.
+is convex quadratic (the band energy is a sum of squares of linear functions
+of the slew, by Parseval), so each shape is a convex problem with a unique optimum.
 It is solved with cvxpy and Clarabel.
 """
 
@@ -71,6 +74,12 @@ MAX_TIP_RETRIES = 3
 """Tips a shape may drop, one at a time, when its fitted targets are infeasible."""
 
 
+BAND_OVERSAMPLING = 4
+"""The band frequencies are spaced ``1 / (BAND_OVERSAMPLING * tr_s)``: each TR
+starts and ends at g = 0 and is played alone, rotated, so its spectrum is
+continuous, not only at harmonics of 1 / TR."""
+
+
 class ShapeOptimizationError(RuntimeError):
     """The solver did not find an optimal waveform for a shape."""
 
@@ -96,6 +105,9 @@ class ShapeMetrics:
     """Largest distance outside a target region (``target_violation``)."""
     max_grad_in_rf_window_mT_per_m: float
     end_grad_mT_per_m: float
+    band_energy_fraction: float
+    """Fraction of the gradient energy (sum over axes, so the same for every
+    rotation) in the penalty bands; 0 without bands."""
 
 
 def num_zero_samples(config: Config) -> int:
@@ -160,6 +172,57 @@ def slew_limits(config: Config) -> FloatArray:
     # T/m/s -> mT/m per raster
     result: FloatArray = limits * 1e3 * raster
     return result
+
+
+def band_frequencies(config: Config) -> FloatArray:
+    """Frequencies (Hz) in the penalty bands, each widened by the margin on both
+    sides, on the oversampled DFT grid of a TR."""
+    n = BAND_OVERSAMPLING * config.raster_points_per_tr
+    f = np.arange(1, n // 2) / (n * config.system.grad_raster_time_s)
+    margin = config.gradients.penalty_band_margin_hz
+    inside = np.zeros(len(f), dtype=bool)
+    for low, high in config.gradients.penalty_bands_hz:
+        inside |= (f >= low - margin) & (f <= high + margin)
+    result: FloatArray = f[inside]
+    return result
+
+
+def band_matrix(config: Config, num_samples: int) -> FloatArray:
+    """Matrix ``B`` such that ``||B @ x||^2`` is the energy of ``x`` in the bands.
+
+    ``x`` has ``num_samples`` <= ``raster_points_per_tr`` values on the
+    gradient raster, zero for the rest of the TR. Its energy ``sum(x**2)`` is
+    the sum over the oversampled DFT of ``|X(f)|^2 / M`` (Parseval, with
+    ``M = BAND_OVERSAMPLING * raster_points_per_tr``); ``B`` keeps the band
+    frequencies, with their negative-frequency mirrors, as cosine and sine rows.
+    """
+    n = BAND_OVERSAMPLING * config.raster_points_per_tr
+    phase = (
+        2 * np.pi * band_frequencies(config)[:, None] * config.system.grad_raster_time_s
+    ) * np.arange(num_samples)
+    result: FloatArray = np.sqrt(2 / n) * np.vstack([np.cos(phase), np.sin(phase)])
+    return result
+
+
+def gradient_cost(config: Config, g: cp.Expression) -> cp.Expression:
+    """The optimizer's objective for a waveform ``g`` (raster points, 3): the slew
+    energy, plus ``band_penalty_weight`` times the slew energy in the bands."""
+    slew = g[1:] - g[:-1]
+    cost = cp.sum_squares(slew)
+    band = band_matrix(config, g.shape[0] - 1)
+    if len(band) and config.gradients.band_penalty_weight > 0:
+        cost = cost + config.gradients.band_penalty_weight * cp.sum_squares(band @ slew)
+    return cost
+
+
+def gradient_cost_value(config: Config, g: FloatArray) -> float:
+    """``gradient_cost`` of a numeric waveform."""
+    slew = np.diff(g, axis=0)
+    cost = float(np.sum(slew**2))
+    band = band_matrix(config, len(slew))
+    if len(band) and config.gradients.band_penalty_weight > 0:
+        cost += config.gradients.band_penalty_weight * float(np.sum((band @ slew) ** 2))
+    return cost
 
 
 def relaxed(config: Config) -> bool:
@@ -227,7 +290,7 @@ def optimize_shape(
         tube = cells_to_kmax(config, s.tube_cells)
         reference = sample_kspace(config, reference_g)
         constraints.append(cp.norm(k - reference, 2, axis=1) <= tube)
-    problem = cp.Problem(cp.Minimize(cp.sum_squares(g[1:] - g[:-1])), constraints)
+    problem = cp.Problem(cp.Minimize(gradient_cost(config, g)), constraints)
     start = time.perf_counter()
     try:
         problem.solve(solver=cp.CLARABEL)
@@ -417,6 +480,7 @@ def shape_metrics(config: Config, shape: Shape) -> ShapeMetrics:
         max_target_error_kmax=target_violation(config, shape.targets, k),
         max_grad_in_rf_window_mT_per_m=float(np.abs(g[: num_zero_samples(config)]).max()),
         end_grad_mT_per_m=float(np.abs(g[-1]).max()),
+        band_energy_fraction=float(np.sum((band_matrix(config, len(g)) @ g) ** 2) / np.sum(g**2)),
     )
 
 
