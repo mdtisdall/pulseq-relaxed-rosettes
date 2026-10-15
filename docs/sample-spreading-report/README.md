@@ -28,4 +28,4 @@ Raw outputs behind [../sample-spreading-report.md](../sample-spreading-report.md
 
 ## Waveforms
 
-The shapes files (`<label>.shapes.npz`, about 2 MB each, 16 shapes with their targets and config) are not in the repository. They are in `~/dev/pulseq-relaxed-rosettes-data/sample-spreading-2026-10-15/` on the machine that ran the experiments. Load them with `relaxed_rosettes.optimize.load_shapes`, and rebuild a sequence with `relaxed-rosettes sequence <file> -o <name>.seq` (the `.seq` and design files were not kept).
+The shapes files (`<label>.shapes.npz`, about 2 MB each, 16 shapes with their targets and config) are not in the repository. They are in `data/sample-spreading-2026-10-15/` of the main checkout on the machine that ran the experiments (`data/` is not tracked; see `.gitignore`). Load them with `relaxed_rosettes.optimize.load_shapes`, and rebuild a sequence with `relaxed-rosettes sequence <file> -o <name>.seq` (the `.seq` and design files were not kept).
