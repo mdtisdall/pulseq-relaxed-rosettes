@@ -23,6 +23,7 @@ against a trajectory. No patient information is copied from the twix header.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,21 @@ TRAJECTORY_UNITS_VALUE = "cycles/FOV, physical gradient axes"
 _NOISE_FLAG = 1 << (ismrmrd.ACQ_IS_NOISE_MEASUREMENT - 1)
 
 ComplexArray = NDArray[np.complex64]
+
+_CHUNK_ROWS = 32
+"""Acquisitions read from the file at a time.
+
+Reads take whole records (``dset[a:b]``), never ``dset.fields(...)``: h5py
+3.16 does not free the variable-length members (``traj``, ``data``) that a
+field read leaves out, so each pass over a file would leak them."""
+
+
+def _record_slices(rows: NDArray[np.int64]) -> Iterator[slice]:
+    """Slices of at most ``_CHUNK_ROWS`` rows that cover sorted, unique ``rows``."""
+    for run in np.split(rows, np.flatnonzero(np.diff(rows) != 1) + 1):
+        for start in range(0, len(run), _CHUNK_ROWS):
+            chunk = run[start : start + _CHUNK_ROWS]
+            yield slice(int(chunk[0]), int(chunk[-1]) + 1)
 
 
 @dataclass(frozen=True)
@@ -233,14 +249,20 @@ class RawData:
         rows = self._rows[slice(None) if trs is None else trs]
         if len(rows) == 0:
             return np.zeros((0, self.num_coils, 0), dtype=np.complex64)
-        order = np.argsort(rows)
+        unique, first, inverse = np.unique(rows, return_index=True, return_inverse=True)
+        out: ComplexArray | None = None
         with h5py.File(self.path, "r") as f:
-            data = f["dataset/data"].fields("data")[rows[order]]
-        out = np.empty(
-            (len(rows), self.num_coils, len(data[0]) // (2 * self.num_coils)), np.complex64
-        )
-        for i, flat in zip(order, data, strict=True):
-            out[i] = flat.view(np.complex64).reshape(self.num_coils, -1)
+            dset = f["dataset/data"]
+            positions = iter(first)
+            for chunk in _record_slices(unique):
+                for flat in dset[chunk]["data"]:
+                    tr = flat.view(np.complex64).reshape(self.num_coils, -1)
+                    if out is None:
+                        out = np.empty((len(rows), *tr.shape), np.complex64)
+                    out[next(positions)] = tr
+        assert out is not None
+        repeats = np.flatnonzero(first[inverse] != np.arange(len(rows)))
+        out[repeats] = out[first[inverse[repeats]]]
         return out
 
     def check_trajectory(self, config: Config, trajectory: Trajectory) -> None:
@@ -261,13 +283,19 @@ class RawData:
 def load_rawdata(path: Path) -> RawData:
     """Read the headers and noise of a file written by ``write_ismrmrd``."""
     with h5py.File(path, "r") as f:
-        if "dataset/xml" not in f or "dataset/data" not in f:
+        if "dataset/xml" not in f or "dataset/data" not in f or len(f["dataset/data"]) == 0:
             raise ValueError(f"{path} is not an ISMRMRD file with acquisitions")
         xml = f["dataset/xml"][0]
-        heads = f["dataset/data"].fields("head")[:]
-        is_noise = (heads["flags"] & _NOISE_FLAG) != 0
-        noise_rows = np.flatnonzero(is_noise)
-        noise_data = f["dataset/data"].fields("data")[noise_rows] if len(noise_rows) else []
+        dset = f["dataset/data"]
+        chunks, noise_data = [], []
+        for chunk in _record_slices(np.arange(len(dset))):
+            records = dset[chunk]
+            # A copy, so that the variable-length members of the chunk are freed.
+            chunks.append(records["head"].copy())
+            noise_data.extend(records["data"][(records["head"]["flags"] & _NOISE_FLAG) != 0])
+    heads = np.concatenate(chunks)
+    is_noise = (heads["flags"] & _NOISE_FLAG) != 0
+    noise_rows = np.flatnonzero(is_noise)
     header = ismrmrd.xsd.CreateFromDocument(xml)
     params = header.userParameters
     strings = {p.name: p.value for p in params.userParameterString} if params else {}

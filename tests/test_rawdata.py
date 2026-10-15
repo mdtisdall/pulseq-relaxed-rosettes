@@ -1,3 +1,6 @@
+import gc
+import os
+import subprocess
 from pathlib import Path
 
 import h5py
@@ -111,7 +114,7 @@ def test_to_ismrmrd_without_trajectory(built: tuple[Path, Path], tmp_path: Path)
     out = tmp_path / "raw.h5"
     assert _convert(meas, seq_path, out, "--no-trajectory") == 0
     with h5py.File(out, "r") as f:
-        heads = f["dataset/data"].fields("head")[:]
+        heads = f["dataset/data"][:]["head"]
     assert np.all(heads["trajectory_dimensions"] == 0)
 
 
@@ -169,3 +172,50 @@ def test_check_trajectory_rejects_another_design(built: tuple[Path, Path], tmp_p
     shorter = Trajectory(**{**trajectory.__dict__, "tr_index": trajectory.tr_index[:2]})
     with pytest.raises(ValueError, match="do not match"):
         load_rawdata(out).check_trajectory(SMALL, shorter)
+
+
+def _rss_mb() -> float:
+    out = subprocess.run(
+        ["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True, text=True, check=True
+    )
+    return int(out.stdout) / 1024
+
+
+def test_reading_does_not_leak(built: tuple[Path, Path], tmp_path: Path) -> None:
+    """Repeated reads keep the memory bounded (h5py field reads leak vlen members)."""
+    seq_path, _ = built
+    meas = tmp_path / "meas.dat"
+    _write_meas(meas, read_seq_signature(seq_path), SMALL.scan.num_trs, np.random.default_rng(7))
+    small = tmp_path / "small.h5"
+    assert _convert(meas, seq_path, small) == 0
+
+    # The TRs of the small file, repeated, each with a 1 MB trajectory: a read
+    # that leaks the trajectories it does not need leaks 96 MB per pass.
+    num_trs, traj_len = 96, 1 << 18
+    out = tmp_path / "large.h5"
+    with h5py.File(small, "r") as src, h5py.File(out, "w") as dst:
+        records = src["dataset/data"][:]
+        dst.create_dataset("dataset/xml", data=src["dataset/xml"][:])
+        is_noise = (records["head"]["flags"] & (1 << (ismrmrd.ACQ_IS_NOISE_MEASUREMENT - 1))) != 0
+        noise, trs = records[is_noise], records[~is_noise]
+        large = np.concatenate([noise, trs[np.arange(num_trs) % len(trs)]])
+        large["head"]["scan_counter"][len(noise) :] = np.arange(num_trs)
+        rng = np.random.default_rng(8)
+        for i in range(len(noise), len(large)):
+            large[i]["traj"] = rng.standard_normal(traj_len).astype(np.float32)
+        dst.create_dataset("dataset/data", data=large)
+
+    def one_pass() -> None:
+        raw = load_rawdata(out)
+        for start in range(0, num_trs, 16):
+            raw.read(np.arange(start, min(start + 16, num_trs)))
+        gc.collect()
+
+    # The allocator can take one step up in the first passes; a leak grows
+    # every pass.
+    for _ in range(2):
+        one_pass()
+    before = _rss_mb()
+    for _ in range(4):
+        one_pass()
+    assert _rss_mb() - before < 96
