@@ -45,6 +45,7 @@ from relaxed_rosettes.sequence import (
     build_sequence,
     load_design,
     make_schedule,
+    read_seq_definition,
     read_seq_signature,
     save_design,
 )
@@ -201,7 +202,7 @@ def _load_seq_and_design(
     config, schedule, shapes = load_design(seq_path.with_suffix(".npz"))
     seq = pp.Sequence(system=make_opts(config))
     seq.read(str(seq_path))
-    digest = seq.get_definition("ConfigDigest")
+    digest = read_seq_definition(seq_path, "ConfigDigest")
     if digest != config.digest():
         raise ValueError(
             f"{seq_path} has config digest {digest!r}, but its design file has {config.digest()!r}"

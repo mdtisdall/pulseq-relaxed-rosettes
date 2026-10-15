@@ -171,6 +171,23 @@ def read_seq_signature(path: Path) -> str:
     return signature
 
 
+def read_seq_definition(path: Path, name: str) -> str:
+    """The value of a ``[DEFINITIONS]`` entry of a ``.seq`` file, as written.
+
+    pypulseq's ``Sequence.read`` turns every value that parses as a number
+    into a float, so a string such as the config digest ``743121874e64`` or
+    ``000123456789`` does not come back from ``get_definition`` as written.
+    """
+    section = re.search(r"^\[DEFINITIONS\]\s*$(.*?)^\s*$", path.read_text(), re.M | re.S)
+    if section is None:
+        raise ValueError(f"{path} has no [DEFINITIONS] section")
+    for line in section.group(1).splitlines():
+        key, _, value = line.strip().partition(" ")
+        if key == name:
+            return value.strip()
+    raise ValueError(f"{path} has no definition {name!r}")
+
+
 def save_design(path: Path, config: Config, schedule: Schedule, shapes: list[Shape]) -> None:
     """Write everything a ``.seq`` file was built from to an ``.npz`` file.
 
