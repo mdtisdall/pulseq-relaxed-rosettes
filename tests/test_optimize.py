@@ -8,6 +8,7 @@ import pytest
 from relaxed_rosettes.cli import main
 from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
 from relaxed_rosettes.optimize import (
+    BAND_OVERSAMPLING,
     Shape,
     ShapeOptimizationError,
     _edge_kspace,
@@ -15,6 +16,9 @@ from relaxed_rosettes.optimize import (
     _optimize_one,
     _Work,
     adc_samples,
+    band_basis,
+    band_frequencies,
+    band_matrix,
     calibrated_petal_time_factor,
     cells_to_kmax,
     k_weights,
@@ -153,6 +157,73 @@ def test_pypulseq_kspace_hits_targets() -> None:
     k_at_targets = k_adc[:, edges - first_edge].T / config.k_max_per_m
     np.testing.assert_allclose(t_adc[edges - first_edge], edges * raster, atol=1e-9)
     np.testing.assert_allclose(k_at_targets, shape.targets.k, atol=1e-6)
+
+
+def test_band_matrix_is_parseval() -> None:
+    """Over every frequency, the band energy is the whole energy."""
+    nyquist = 0.5 / SMALL.system.grad_raster_time_s
+    config = SMALL.with_overrides(
+        [f"gradients.penalty_bands_hz=[[0, {nyquist}]]", "gradients.penalty_band_margin_hz=0"]
+    )
+    x = np.random.default_rng(0).standard_normal(SMALL.raster_points_per_tr - 1)
+    x -= x.mean()  # no energy at 0 Hz, which the bands leave out
+    # Nyquist (one of M = BAND_OVERSAMPLING * N frequencies) is left out too.
+    m = BAND_OVERSAMPLING * SMALL.raster_points_per_tr
+    nyquist_energy = np.sum(x * (-1.0) ** np.arange(len(x))) ** 2 / m
+    energy = np.sum((band_matrix(config, len(x)) @ x) ** 2)
+    assert energy == pytest.approx(np.sum(x**2) - nyquist_energy, rel=1e-9)
+
+
+def test_band_basis_keeps_the_band_energy() -> None:
+    config = SMALL.with_overrides(["gradients.penalty_bands_hz=[[500, 600], [1000, 1100]]"])
+    n = SMALL.raster_points_per_tr - 1
+    full, basis = band_matrix(config, n), band_basis(config, n)
+    assert len(basis) < len(full)
+    x = np.random.default_rng(2).standard_normal((n, 3))
+    error = np.sum((full @ x) ** 2) - np.sum((basis @ x) ** 2)
+    # Each dropped direction is below the tolerance times the largest.
+    assert 0 <= error <= 1e-6 * float(np.sum(x**2))
+
+
+def test_band_frequencies_cover_each_band() -> None:
+    config = SMALL.with_overrides(
+        [
+            "gradients.penalty_bands_hz=[[500, 600], [1000, 1100]]",
+            "gradients.penalty_band_margin_hz=50",
+        ]
+    )
+    f = band_frequencies(config)
+    step = 1 / (BAND_OVERSAMPLING * SMALL.readout.tr_s)
+    assert np.all(((f >= 450) & (f <= 650)) | ((f >= 950) & (f <= 1150)))
+    assert len(f) == 2 * (round(200 / step) + 1)
+
+
+def test_band_penalty_reduces_band_energy(small_shapes: list[Shape]) -> None:
+    bands = "gradients.penalty_bands_hz=[[1500, 2500]]"
+    off = SMALL.with_overrides([bands, "gradients.band_penalty_weight=0"])
+    on = SMALL.with_overrides([bands])
+    targets = make_targets(on)[0]
+    before = shape_metrics(off, optimize_shape(off, targets))
+    after = shape_metrics(on, optimize_shape(on, targets))
+    assert after.max_target_error_kmax < TOL
+    assert after.band_energy_fraction < before.band_energy_fraction / 10
+    assert shape_metrics(SMALL, small_shapes[0]).band_energy_fraction == 0.0
+
+
+def test_cli_reads_penalty_bands_from_asc(tmp_path: Path) -> None:
+    gc = "asGPAParameters[0].sGCParameters"
+    asc = tmp_path / "coil.asc"
+    asc.write_text(
+        f"{gc}.aflAcousticResonanceFrequency[0] = 2000\n"
+        f"{gc}.aflAcousticResonanceBandwidth[0] = 400\n"
+    )
+    config_path = tmp_path / "small.toml"
+    config_path.write_text(SMALL.with_overrides(["shapes.num_shapes=1"]).to_toml())
+    path = tmp_path / "shapes.npz"
+    args = ["shapes", str(config_path), "-o", str(path), "--jobs", "1", "--asc", str(asc)]
+    assert main(args) == 0
+    config, _ = load_shapes(path)
+    assert config.gradients.penalty_bands_hz == ((1800.0, 2200.0),)
 
 
 def test_cli_writes_loadable_file(tmp_path: Path, small_shapes: list[Shape]) -> None:

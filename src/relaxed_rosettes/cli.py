@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from collections.abc import Sequence
@@ -161,18 +162,25 @@ def _cmd_targets(args: argparse.Namespace) -> int:
 
 def _cmd_shapes(args: argparse.Namespace) -> int:
     config = _load_config(args)
+    if args.asc:
+        bands = tuple(acoustic_resonances(args.asc))
+        if not bands:
+            print(f"error: {args.asc} has no acoustic resonances", file=sys.stderr)
+            return 1
+        gradients = dataclasses.replace(config.gradients, penalty_bands_hz=bands)
+        config = dataclasses.replace(config, gradients=gradients)
     shapes = optimize_shapes(config, jobs=args.jobs)
     save_shapes(args.output, config, shapes)
     print(
         f"{'shape':>5} {'echoes':>6} {'max |g| mT/m':>13} {'max slew T/m/s':>15} "
-        f"{'k error':>9} {'solve s':>8}"
+        f"{'k error':>9} {'in bands':>9} {'solve s':>8}"
     )
     for i, shape in enumerate(shapes):
         m = shape_metrics(config, shape)
         print(
             f"{i:5d} {shape.targets.num_echoes:6d} {m.max_grad_mT_per_m:13.2f} "
             f"{m.max_slew_T_per_m_per_s:15.2f} {m.max_target_error_kmax:9.1e} "
-            f"{shape.solve_time_s:8.2f}"
+            f"{m.band_energy_fraction:9.1e} {shape.solve_time_s:8.2f}"
         )
     print(
         f"wrote {args.output}: {len(shapes)} shapes, "
@@ -227,6 +235,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
     bands = list(args.band)
     if args.asc and not bands:
         bands = acoustic_resonances(args.asc)
+    if not bands:
+        bands = list(config.gradients.penalty_bands_hz)
     report: dict[str, Any] = {
         "config_digest": config.digest(),
         "timing": timing_report(seq),
@@ -584,6 +594,12 @@ def build_parser() -> argparse.ArgumentParser:
     shapes.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
     shapes.add_argument(
         "--jobs", type=int, default=None, help="worker processes (default: CPU count)"
+    )
+    shapes.add_argument(
+        "--asc",
+        type=Path,
+        help="Siemens gradient system file (MP_GradSys_*.asc): its acoustic resonances "
+        "replace gradients.penalty_bands_hz",
     )
     shapes.set_defaults(func=_cmd_shapes)
 

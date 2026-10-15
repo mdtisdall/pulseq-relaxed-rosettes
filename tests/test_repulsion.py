@@ -221,6 +221,21 @@ def test_repulsion_with_point_targets_keeps_them() -> None:
     assert slew_energy(shape.g_mT_per_m) > slew_energy(hairpin.g_mT_per_m)
 
 
+def test_repulsion_keeps_the_band_penalty(relaxed_shape: Shape) -> None:
+    bands = "gradients.penalty_bands_hz=[[1500, 2500]]"
+    off = REPEL.with_overrides([bands, "gradients.band_penalty_weight=0"])
+    on = REPEL.with_overrides([bands])
+    start = solve_shape(on, relaxed_shape.targets)
+    # Repulsion with the penalty in its cost leaves less energy in the band.
+    with_penalty, _ = repel_shape(on, start)
+    without, _ = repel_shape(off, start)
+    assert (
+        shape_metrics(on, with_penalty).band_energy_fraction
+        < shape_metrics(on, without).band_energy_fraction
+    )
+    assert shape_metrics(on, with_penalty).max_target_error_kmax < TOL
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     [
