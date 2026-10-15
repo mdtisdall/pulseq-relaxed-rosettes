@@ -5,7 +5,7 @@ import pypulseq as pp
 import pytest
 from scipy.spatial.transform import Rotation
 
-from relaxed_rosettes.cli import main
+from relaxed_rosettes.cli import _load_seq_and_design, main
 from relaxed_rosettes.config import Config
 from relaxed_rosettes.optimize import Shape, optimize_shapes
 from relaxed_rosettes.rotations import super_fibonacci_quaternions
@@ -16,6 +16,8 @@ from relaxed_rosettes.sequence import (
     check_adc_segments,
     load_design,
     make_schedule,
+    read_seq_definition,
+    save_design,
 )
 from relaxed_rosettes.system import make_opts
 
@@ -132,10 +134,31 @@ def test_write_read_round_trip(tmp_path: Path, seq: pp.Sequence) -> None:
     seq.write(str(path))
     read = pp.Sequence(system=make_opts(SMALL))
     read.read(str(path))
-    assert read.get_definition("ConfigDigest") == SMALL.digest()
+    assert read_seq_definition(path, "ConfigDigest") == SMALL.digest()
     k_original = seq.calculate_kspace()[0]
     k_read = read.calculate_kspace()[0]
     np.testing.assert_allclose(k_read, k_original, atol=1e-3)
+
+
+@pytest.mark.parametrize("digest", ["743121874e64", "000123456789"])
+def test_numeric_looking_digest_round_trips(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shapes: list[Shape],
+    schedule: Schedule,
+    digest: str,
+) -> None:
+    """A digest that pypulseq reads back as a number still matches its design."""
+    monkeypatch.setattr(Config, "digest", lambda self: digest)
+    path = tmp_path / "numeric.seq"
+    build_sequence(SMALL, shapes, schedule).write(str(path))
+    save_design(path.with_suffix(".npz"), SMALL, schedule, shapes)
+    read = pp.Sequence(system=make_opts(SMALL))
+    read.read(str(path))
+    assert read.get_definition("ConfigDigest") != digest
+    assert read_seq_definition(path, "ConfigDigest") == digest
+    _, config, _, _ = _load_seq_and_design(path)
+    assert config.digest() == digest
 
 
 def test_cli_writes_seq_and_design(tmp_path: Path) -> None:
