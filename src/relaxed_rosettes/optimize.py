@@ -223,23 +223,21 @@ def optimize_shape(
     relax = relaxed(config) if relax is None else relax
     n = config.raster_points_per_tr
     n_zero = num_zero_samples(config)
-    scale = kmax_per_mT_per_m_raster(config)
-    weights = np.stack([k_weights(n, e) for e in target_edges(config, targets)])
 
     g = cp.Variable((n, 3))
     slew = g[1:] - g[:-1]
-    constraints = [
+    k_samples, constraints = _kspace_variable(config, g)
+    constraints += [
         g[:n_zero] == 0,
         g[n - 1] == 0,
         cp.norm(g, 2, axis=1) <= config.gradients.max_grad_mT_per_m * (1 - LIMIT_MARGIN),
         cp.norm(slew, 2, axis=1) <= slew_limits(config) * (1 - LIMIT_MARGIN),
     ]
-    k_targets = scale * (weights @ g)
+    k_targets = _edge_kspace(config, k_samples, g, target_edges(config, targets))
     if not relax:
         constraints.append(k_targets == targets.k)
     else:
         constraints += _relaxed_target_constraints(config, targets, k_targets, tip_directions)
-        k_samples = scale * (cp.cumsum(g, axis=0) - 0.5 * g)  # g[0] = 0 (RF window)
         adc = adc_samples(config)
         constraints.append(cp.norm(k_samples[adc], 2, axis=1) <= 1.0)
         if reference_g is not None and s.tube_cells > 0:
@@ -261,6 +259,43 @@ def optimize_shape(
         targets=targets,
         status=str(problem.status),
         solve_time_s=elapsed,
+    )
+
+
+def _kspace_variable(config: Config, g: cp.Variable) -> tuple[cp.Variable, list[cp.Constraint]]:
+    """k (units of k_max) at the gradient sample times as a variable of its
+    own, tied to ``g`` by the recurrence of ``sample_kspace``:
+    ``k[0] = scale * g[0] / 4`` and ``k[i] = k[i - 1] + scale * (g[i - 1] + g[i]) / 2``.
+
+    Written as ``cumsum(g)``, every k would depend on every earlier sample,
+    and each constraint on k would be a dense lower-triangular block. The
+    recurrence is banded, so every constraint on k stays sparse.
+    """
+    scale = kmax_per_mT_per_m_raster(config)
+    k = cp.Variable(g.shape)
+    constraints = [
+        k[0] == 0.25 * scale * g[0],
+        k[1:] - k[:-1] == 0.5 * scale * (g[1:] + g[:-1]),
+    ]
+    return k, constraints
+
+
+def _edge_kspace(
+    config: Config, k: cp.Variable, g: cp.Variable, edges: NDArray[np.int64]
+) -> cp.Expression:
+    """k at raster edges (``k_weights``), from k and g at the samples next to
+    each edge: edge ``e`` is half a raster after sample ``e - 1``, so k there
+    is ``k[e - 1] + scale * (3 g[e - 1] + g[e]) / 8``, or
+    ``k[N - 1] + scale * g[N - 1] / 4`` at the end of the TR (last = 0)."""
+    n = config.raster_points_per_tr
+    scale = kmax_per_mT_per_m_raster(config)
+    before = edges - 1
+    after = np.minimum(edges, n - 1)
+    end = edges == n
+    weight_before = np.repeat(np.where(end, 0.25, 3 / 8)[:, None], 3, axis=1)
+    weight_after = np.repeat(np.where(end, 0.0, 1 / 8)[:, None], 3, axis=1)
+    return k[before] + scale * (
+        cp.multiply(weight_before, g[before]) + cp.multiply(weight_after, g[after])
     )
 
 
