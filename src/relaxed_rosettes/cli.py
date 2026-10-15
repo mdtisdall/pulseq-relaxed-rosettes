@@ -41,7 +41,7 @@ from relaxed_rosettes.sequence import (
     save_design,
 )
 from relaxed_rosettes.system import make_opts
-from relaxed_rosettes.targets import make_targets, save_targets
+from relaxed_rosettes.targets import ShapeTargets, make_targets, save_targets
 from relaxed_rosettes.trajectory import make_trajectory, save_trajectory, verify_trajectory
 
 
@@ -80,6 +80,12 @@ def _cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _echo_range(targets: list[ShapeTargets]) -> str:
+    counts = [t.num_echoes for t in targets]
+    low, high = min(counts), max(counts)
+    return str(low) if low == high else f"{low}-{high} (mean {np.mean(counts):.1f})"
+
+
 def _cmd_targets(args: argparse.Namespace) -> int:
     config = _load_config(args)
     targets = make_targets(config)
@@ -87,7 +93,7 @@ def _cmd_targets(args: argparse.Namespace) -> int:
     crossings = [t.crossing_times_s for t in targets]
     first, last = min(c[0] for c in crossings), max(c[-1] for c in crossings)
     print(
-        f"wrote {args.output}: {len(targets)} shapes, {targets[0].num_echoes} echoes each, "
+        f"wrote {args.output}: {len(targets)} shapes, {_echo_range(targets)} echoes each, "
         f"crossings from {first * 1e3:.2f} to {last * 1e3:.2f} ms (config {config.digest()})"
     )
     return 0
@@ -97,14 +103,21 @@ def _cmd_shapes(args: argparse.Namespace) -> int:
     config = _load_config(args)
     shapes = optimize_shapes(config, jobs=args.jobs)
     save_shapes(args.output, config, shapes)
-    print(f"{'shape':>5} {'max |g| mT/m':>13} {'max slew T/m/s':>15} {'k error':>9} {'solve s':>8}")
+    print(
+        f"{'shape':>5} {'echoes':>6} {'max |g| mT/m':>13} {'max slew T/m/s':>15} "
+        f"{'k error':>9} {'solve s':>8}"
+    )
     for i, shape in enumerate(shapes):
         m = shape_metrics(config, shape)
         print(
-            f"{i:5d} {m.max_grad_mT_per_m:13.2f} {m.max_slew_T_per_m_per_s:15.2f} "
-            f"{m.max_target_error_kmax:9.1e} {shape.solve_time_s:8.2f}"
+            f"{i:5d} {shape.targets.num_echoes:6d} {m.max_grad_mT_per_m:13.2f} "
+            f"{m.max_slew_T_per_m_per_s:15.2f} {m.max_target_error_kmax:9.1e} "
+            f"{shape.solve_time_s:8.2f}"
         )
-    print(f"wrote {args.output}: {len(shapes)} shapes (config {config.digest()})")
+    print(
+        f"wrote {args.output}: {len(shapes)} shapes, "
+        f"{_echo_range([s.targets for s in shapes])} echoes each (config {config.digest()})"
+    )
     return 0
 
 

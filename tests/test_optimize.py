@@ -9,6 +9,9 @@ from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
 from relaxed_rosettes.optimize import (
     Shape,
     ShapeOptimizationError,
+    _optimize_one,
+    _Work,
+    calibrated_petal_time_factor,
     k_weights,
     load_shapes,
     num_zero_samples,
@@ -17,7 +20,7 @@ from relaxed_rosettes.optimize import (
     shape_metrics,
 )
 from relaxed_rosettes.system import make_opts
-from relaxed_rosettes.targets import make_targets
+from relaxed_rosettes.targets import make_shape_targets, make_targets, shape_streams
 
 # A short TR with few echoes keeps most tests fast.
 SMALL = Config().with_overrides(
@@ -90,7 +93,8 @@ def test_unreachable_targets_raise() -> None:
 def test_pypulseq_kspace_hits_targets() -> None:
     """The full-size default shape, played by pypulseq, passes every target."""
     config = Config().with_overrides(["shapes.num_shapes=1"])
-    shape = optimize_shape(config, make_targets(config)[0])
+    # The provisional petal time factor, so as not to calibrate it here.
+    shape = optimize_shape(config, make_targets(config, petal_time_factor=1.1)[0])
     system = make_opts(config)
     raster = config.system.grad_raster_time_s
 
@@ -138,3 +142,29 @@ def test_cli_writes_loadable_file(tmp_path: Path, small_shapes: list[Shape]) -> 
     for a, b in zip(loaded, small_shapes, strict=True):
         np.testing.assert_allclose(a.g_mT_per_m, b.g_mT_per_m, atol=1e-9)
         np.testing.assert_array_equal(a.targets.t_s, b.targets.t_s)
+
+
+FITTED = SMALL.with_overrides(["shapes.echoes_per_tr=0", "shapes.timing_calibration_shapes=2"])
+
+
+def test_fitted_shapes_calibrate_and_solve() -> None:
+    factor = calibrated_petal_time_factor(FITTED, jobs=1)
+    # The straight-path petal time is a lower bound; the turns at k = 0 add a little.
+    assert 1.0 < factor < 1.5
+    g = FITTED.gradients
+    for shape in optimize_shapes(FITTED, jobs=1):
+        assert shape.targets.num_echoes >= 2
+        m = shape_metrics(FITTED, shape)
+        assert m.max_slew_T_per_m_per_s <= g.max_slew_T_per_m_per_s * (1 + TOL)
+        assert m.max_target_error_kmax < TOL
+
+
+def test_infeasible_fitted_shape_drops_tips() -> None:
+    # Too small a factor: the petals get less than their shortest time.
+    stream = shape_streams(FITTED)[0]
+    targets = make_shape_targets(FITTED, stream, None, 0.8)
+    with pytest.raises(ShapeOptimizationError):
+        optimize_shape(FITTED, targets)
+    shape = _optimize_one(_Work(FITTED, targets, 0, None, 0.8))
+    assert shape.targets.num_echoes < targets.num_echoes
+    assert shape_metrics(FITTED, shape).max_target_error_kmax < TOL
