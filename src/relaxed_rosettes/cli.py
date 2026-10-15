@@ -306,6 +306,60 @@ def _cmd_to_ismrmrd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_phantom_init(args: argparse.Namespace) -> int:
+    from relaxed_rosettes.recon.phantom import PhantomConfig
+
+    path: Path = args.path
+    if path.exists() and not args.force:
+        print(f"error: {path} exists (use --force to overwrite)", file=sys.stderr)
+        return 1
+    path.write_text(PhantomConfig().to_toml())
+    print(f"wrote {path}")
+    return 0
+
+
+def _cmd_phantom_show(args: argparse.Namespace) -> int:
+    from relaxed_rosettes.recon.phantom import PhantomConfig
+
+    phantom = PhantomConfig.load(args.phantom) if args.phantom else PhantomConfig()
+    print(f"# phantom digest: {phantom.digest()}")
+    print(phantom.to_toml(), end="")
+    return 0
+
+
+def _cmd_simulate(args: argparse.Namespace) -> int:
+    try:
+        from relaxed_rosettes.recon.phantom import PhantomConfig, simulate_noise, simulate_trs
+        from relaxed_rosettes.recon.rawdata import (
+            PHANTOM_DIGEST,
+            PHANTOM_TOML,
+            write_simulated_ismrmrd,
+        )
+    except ImportError as e:
+        print(f"error: simulate needs the recon extra ({e})", file=sys.stderr)
+        return 1
+    phantom = PhantomConfig.load(args.phantom)
+    _, config, schedule, shapes = _load_seq_and_design(args.seq)
+    signature = read_seq_signature(args.seq)
+    trajectory = make_trajectory(config, schedule, shapes)
+    coils = write_simulated_ismrmrd(
+        args.output,
+        config,
+        trajectory,
+        signature,
+        simulate_trs(phantom, trajectory, batch_trs=args.batch_trs),
+        simulate_noise(phantom, config.readout.adc_num_samples),
+        extra_strings={PHANTOM_TOML: phantom.to_toml(), PHANTOM_DIGEST: phantom.digest()},
+        embed_trajectory=not args.no_trajectory,
+    )
+    print(
+        f"wrote {args.output}: {len(trajectory.tr_index)} TRs, {coils} coils, "
+        f"{phantom.noise_readouts} noise readouts (config {config.digest()}, "
+        f"phantom {phantom.digest()}, signature {signature})"
+    )
+    return 0
+
+
 def _cmd_grid(args: argparse.Namespace) -> int:
     try:
         from relaxed_rosettes.recon.gridding import reconstruct, save_gridding
@@ -576,6 +630,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="convert even if the raw data header does not have the .seq signature",
     )
     to_ismrmrd.set_defaults(func=_cmd_to_ismrmrd)
+
+    phantom = commands.add_parser(
+        "phantom", help="write or show a phantom for `relaxed-rosettes simulate`"
+    )
+    phantom_commands = phantom.add_subparsers(dest="phantom_command", required=True)
+    phantom_init = phantom_commands.add_parser(
+        "init", help="write a phantom file with the default phantom"
+    )
+    phantom_init.add_argument("path", type=Path, help="TOML file to write")
+    phantom_init.add_argument("--force", action="store_true", help="overwrite an existing file")
+    phantom_init.set_defaults(func=_cmd_phantom_init)
+    phantom_show = phantom_commands.add_parser(
+        "show", help="validate a phantom and print it with all defaults filled in"
+    )
+    phantom_show.add_argument(
+        "phantom", nargs="?", type=Path, help="phantom TOML file (default: built-in phantom)"
+    )
+    phantom_show.set_defaults(func=_cmd_phantom_show)
+
+    simulate = commands.add_parser(
+        "simulate",
+        help="simulate a scan of an analytic phantom, as ISMRMRD raw data (recon extra)",
+    )
+    simulate.add_argument("phantom", type=Path, help="phantom TOML file")
+    simulate.add_argument(
+        "seq", type=Path, help=".seq file to simulate, with its design .npz next to it"
+    )
+    simulate.add_argument(
+        "-o", "--output", type=Path, required=True, help="output ISMRMRD file (.h5; must not exist)"
+    )
+    simulate.add_argument(
+        "--batch-trs", type=int, default=64, help="TRs simulated at a time (default: 64)"
+    )
+    simulate.add_argument(
+        "--no-trajectory",
+        action="store_true",
+        help="do not store the k-space trajectory in each acquisition",
+    )
+    simulate.set_defaults(func=_cmd_simulate)
 
     coverage = commands.add_parser(
         "coverage",

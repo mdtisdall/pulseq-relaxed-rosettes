@@ -199,12 +199,12 @@ Each experiment tests a claim of sections 3–6. Record each result here, in the
 
 ### 7.1 Shared tools
 
-The reconstruction has no τ basis and no numerical phantom yet (`relaxed_rosettes.recon` has CG-SENSE, coil maps and B0). The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) is about T, not τ.
+The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) is about T, not τ.
 
-- **τ basis**: the SVD of simulated signal curves over the ADC window, for ranges of T2\* and off-resonance. It gives $L$ and $\phi_l(\tau)$.
+- **τ basis** (`relaxed_rosettes.recon.basis`): the SVD of decay curves over the ADC window, for a range of R2\*. It gives $L$ and $\phi_l(\tau)$. Off-resonance stays in the field map and time segments of the reconstruction.
 - **Frame-potential evaluator** for each requirement: the NUFFT (PSF) form for the terms averaged over T, the accumulated-grid form for the terms local in T (section 5).
 - **k–T spectral score**: for each k-region at a requirement's resolution, the power spectrum of its sample occupancy over T, integrated over the BOLD band.
-- **Numerical phantom** $x(r, \tau, T)$: T2\* and B0 maps, a 1% BOLD time course in a few regions, and respiratory and cardiac components. Needed only for experiments 1, 6 and 7.
+- **Numerical phantom** $x(r, \tau, T)$ (`relaxed_rosettes.recon.phantom`, `relaxed-rosettes simulate`): analytic ellipsoids and Gaussian blobs, each with its own density, R2\* and off-resonance, which can vary over scan time (a BOLD R2\* change in blocks, cardiac and respiratory sines). The signal is exact at every sample, written as ISMRMRD. Needed only for experiments 1, 6 and 7.
 
 ### 7.2 Experiments
 
