@@ -11,7 +11,9 @@ The waveform minimizes slew energy subject to:
   excitation is played with the gradients off), and at the end of the TR;
 - |g| <= max gradient, and |slew| <= max slew, tightened to the boundary
   slew in the first and last ``boundary_duration_s`` of the gradient;
-- k(t) = target at each target time, with k = 0 at the RF center.
+- k(t) = target at each target time, with k = 0 at the RF center; or, with
+  relaxed targets (``relaxed``), each target in a region around it, and
+  |k| <= k_max during the ADC.
 
 All constraints are linear or second-order cone constraints, and the objective
 is convex quadratic, so each shape is a convex problem with a unique optimum.
@@ -91,6 +93,7 @@ class ShapeMetrics:
     max_slew_T_per_m_per_s: float
     max_boundary_slew_T_per_m_per_s: float
     max_target_error_kmax: float
+    """Largest distance outside a target region (``target_violation``)."""
     max_grad_in_rf_window_mT_per_m: float
     end_grad_mT_per_m: float
 
@@ -159,8 +162,65 @@ def slew_limits(config: Config) -> FloatArray:
     return result
 
 
-def optimize_shape(config: Config, targets: ShapeTargets) -> Shape:
-    """Minimum slew-energy waveform that hits the targets of one shape."""
+def relaxed(config: Config) -> bool:
+    """Whether the config relaxes the crossings or the tips to regions."""
+    s = config.shapes
+    return s.crossing_tolerance_cells > 0 or s.tip_width > 0
+
+
+def cells_to_kmax(config: Config, cells: float) -> float:
+    """A distance in k-space cells (1 / FOV), in units of k_max."""
+    return cells / (config.geometry.fov_m * config.k_max_per_m)
+
+
+def sample_kspace(config: Config, g: FloatArray) -> FloatArray:
+    """k (units of k_max) at each gradient sample time ``(i + 0.5) * raster``.
+
+    Exact for the piecewise-linear waveform with ``first`` = 0: from 0 to
+    sample 0 the integral is a quarter of ``g[0]``, then half of each pair.
+    """
+    k: FloatArray = kmax_per_mT_per_m_raster(config) * (
+        np.cumsum(g, axis=0) - 0.5 * g - 0.25 * g[:1]
+    )
+    return k
+
+
+def adc_samples(config: Config) -> NDArray[np.bool_]:
+    """Gradient samples whose time is in the ADC window."""
+    t = (np.arange(config.raster_points_per_tr) + 0.5) * config.system.grad_raster_time_s
+    mask: NDArray[np.bool_] = (t >= config.adc_start_s) & (t <= config.adc_end_s)
+    return mask
+
+
+def target_kspace(config: Config, g: FloatArray, targets: ShapeTargets) -> FloatArray:
+    """k (units of k_max) of a waveform at each target time."""
+    scale = kmax_per_mT_per_m_raster(config)
+    weights = np.stack([k_weights(len(g), e) for e in target_edges(config, targets)])
+    k: FloatArray = scale * (weights @ g)
+    return k
+
+
+def optimize_shape(
+    config: Config,
+    targets: ShapeTargets,
+    *,
+    relax: bool | None = None,
+    tip_directions: FloatArray | None = None,
+    reference_g: FloatArray | None = None,
+) -> Shape:
+    """Minimum slew-energy waveform that meets the targets of one shape.
+
+    With ``relax`` (default: ``relaxed(config)``), the crossings and tips are
+    regions: ``|k| <= crossing_tolerance_cells`` at each crossing; at each tip
+    of radius r, ``u . k >= r`` along ``tip_directions`` (default: the
+    designed directions) and ``|k - tip| <= tip_width * r``; and
+    ``|k| <= 1`` at every gradient sample in the ADC. ``u . k >= r`` is a
+    convex inner approximation of ``|k| >= r``. With ``reference_g`` and
+    ``tube_cells`` > 0, k stays within ``tube_cells`` of the reference's k at
+    every gradient sample. The spoil moment is always exact.
+    """
+    s = config.shapes
+    relax = relaxed(config) if relax is None else relax
     n = config.raster_points_per_tr
     n_zero = num_zero_samples(config)
     scale = kmax_per_mT_per_m_raster(config)
@@ -173,8 +233,19 @@ def optimize_shape(config: Config, targets: ShapeTargets) -> Shape:
         g[n - 1] == 0,
         cp.norm(g, 2, axis=1) <= config.gradients.max_grad_mT_per_m * (1 - LIMIT_MARGIN),
         cp.norm(slew, 2, axis=1) <= slew_limits(config) * (1 - LIMIT_MARGIN),
-        scale * (weights @ g) == targets.k,
     ]
+    k_targets = scale * (weights @ g)
+    if not relax:
+        constraints.append(k_targets == targets.k)
+    else:
+        constraints += _relaxed_target_constraints(config, targets, k_targets, tip_directions)
+        k_samples = scale * (cp.cumsum(g, axis=0) - 0.5 * g)  # g[0] = 0 (RF window)
+        adc = adc_samples(config)
+        constraints.append(cp.norm(k_samples[adc], 2, axis=1) <= 1.0)
+        if reference_g is not None and s.tube_cells > 0:
+            tube = cells_to_kmax(config, s.tube_cells)
+            reference = sample_kspace(config, reference_g)
+            constraints.append(cp.norm(k_samples - reference, 2, axis=1) <= tube)
     problem = cp.Problem(cp.Minimize(cp.sum_squares(slew)), constraints)
     start = time.perf_counter()
     try:
@@ -191,6 +262,89 @@ def optimize_shape(config: Config, targets: ShapeTargets) -> Shape:
         status=str(problem.status),
         solve_time_s=elapsed,
     )
+
+
+def _relaxed_target_constraints(
+    config: Config,
+    targets: ShapeTargets,
+    k_targets: cp.Expression,
+    tip_directions: FloatArray | None,
+) -> list[cp.Constraint]:
+    s = config.shapes
+    crossings = k_targets[1:-1:2]
+    tips = k_targets[0:-1:2]
+    constraints: list[cp.Constraint] = [k_targets[-1] == targets.spoil]
+    tolerance = cells_to_kmax(config, s.crossing_tolerance_cells)
+    if tolerance > 0:
+        constraints.append(cp.norm(crossings, 2, axis=1) <= tolerance)
+    else:
+        constraints.append(crossings == 0)
+    if s.tip_width > 0:
+        radii = np.linalg.norm(targets.tips, axis=1)
+        u = targets.tips / radii[:, None] if tip_directions is None else tip_directions
+        constraints.append(cp.sum(cp.multiply(u, tips), axis=1) >= radii)
+        constraints.append(cp.norm(tips - targets.tips, 2, axis=1) <= s.tip_width * radii)
+    else:
+        constraints.append(tips == targets.tips)
+    return constraints
+
+
+def solve_shape(config: Config, targets: ShapeTargets, relinearize: bool = True) -> Shape:
+    """The waveform of one shape, with the config's relaxed targets.
+
+    Point targets: one ``optimize_shape``. Relaxed targets: with
+    ``tube_cells`` > 0, the hairpin (point-target) waveform first, as the
+    tube's reference; then the relaxed waveform; then, if ``relinearize``,
+    ``tip_relinearizations`` more solves, each with the reach constraint of
+    every tip turned toward where the tip landed. Each such solve starts
+    from a feasible point (the previous waveform), so the slew energy never
+    increases. ``solve_time_s`` is the total.
+    """
+    s = config.shapes
+    if not relaxed(config):
+        return optimize_shape(config, targets)
+    reference = None
+    total = 0.0
+    if s.tube_cells > 0:
+        hairpin = optimize_shape(config, targets, relax=False)
+        reference, total = hairpin.g_mT_per_m, hairpin.solve_time_s
+    shape = optimize_shape(config, targets, reference_g=reference)
+    total += shape.solve_time_s
+    rounds = s.tip_relinearizations if relinearize and s.tip_width > 0 else 0
+    for _ in range(rounds):
+        tips = target_kspace(config, shape.g_mT_per_m, targets)[0:-1:2]
+        directions = tips / np.linalg.norm(tips, axis=1, keepdims=True)
+        shape = optimize_shape(config, targets, tip_directions=directions, reference_g=reference)
+        total += shape.solve_time_s
+    return dataclasses.replace(shape, solve_time_s=total)
+
+
+def target_violation(config: Config, targets: ShapeTargets, k: FloatArray) -> float:
+    """Largest distance (units of k_max) of ``k`` outside its target regions.
+
+    Point targets: the largest error of any component. Relaxed targets: the
+    distance outside the crossing ball, below the tip radius, or outside the
+    tip anchor, and the spoil error.
+    """
+    if not relaxed(config):
+        return float(np.abs(k - targets.k).max())
+    s = config.shapes
+    tolerance = cells_to_kmax(config, s.crossing_tolerance_cells)
+    radii = np.linalg.norm(targets.tips, axis=1)
+    tips = k[0:-1:2]
+    tip_offset = np.linalg.norm(tips - targets.tips, axis=1)
+    if s.tip_width > 0:
+        tip_violation = np.maximum.reduce(
+            [radii - np.linalg.norm(tips, axis=1), tip_offset - s.tip_width * radii]
+        )
+    else:
+        tip_violation = tip_offset
+    violations = [
+        np.linalg.norm(k[1:-1:2], axis=1) - tolerance,
+        tip_violation,
+        np.linalg.norm(k[-1:] - targets.spoil, axis=1),
+    ]
+    return float(max(0.0, *(float(v.max()) for v in violations)))
 
 
 def shape_metrics(config: Config, shape: Shape) -> ShapeMetrics:
@@ -210,14 +364,12 @@ def shape_metrics(config: Config, shape: Shape) -> ShapeMetrics:
         t >= config.readout.tr_s - gc.boundary_duration_s - 1e-12
     )
 
-    scale = kmax_per_mT_per_m_raster(config)
-    edges = target_edges(config, shape.targets)
-    k = np.stack([scale * (k_weights(len(g), e) @ g) for e in edges])
+    k = target_kspace(config, g, shape.targets)
     return ShapeMetrics(
         max_grad_mT_per_m=float(np.linalg.norm(g, axis=1).max()),
         max_slew_T_per_m_per_s=float(slew.max()),
         max_boundary_slew_T_per_m_per_s=float(slew[boundary].max()),
-        max_target_error_kmax=float(np.abs(k - shape.targets.k).max()),
+        max_target_error_kmax=target_violation(config, shape.targets, k),
         max_grad_in_rf_window_mT_per_m=float(np.abs(g[: num_zero_samples(config)]).max()),
         end_grad_mT_per_m=float(np.abs(g[-1]).max()),
     )
@@ -245,7 +397,7 @@ def _optimize_one(work: _Work) -> Shape:
     stream = shape_streams(work.config)[work.index] if retries else None
     for attempt in range(retries + 1):
         try:
-            return optimize_shape(work.config, targets)
+            return solve_shape(work.config, targets)
         except ShapeOptimizationError as e:
             if attempt == retries or targets.num_echoes == 1:
                 raise ShapeOptimizationError(f"shape {work.index}: {e}") from None
@@ -305,9 +457,13 @@ def shortest_petal_time_factor(
     The shape gets the tips that fit at ``segment_time_margin`` times
     ``PROVISIONAL_PETAL_TIME_FACTOR``, packed from the start of the petal
     window at the factor, with the rest of the window going to the path out
-    to the spoil moment. The factor is found by bisection between 1 (the
-    straight-path bound, never beaten) and the factor that fills the window,
-    to ``TIMING_CALIBRATION_STEPS`` halvings.
+    to the spoil moment. The factor is found by bisection between 1 and the
+    factor that fills the window, to ``TIMING_CALIBRATION_STEPS`` halvings.
+    1 is the straight-path bound of ``petal_times_s``. It also holds for
+    relaxed tips, up to the small crossing tolerance: the component of the
+    path along the tip direction must still go out to the tip radius and
+    back under the same limits. A loop gives a petal more path, not less
+    time.
     """
     s = config.shapes
     start, end = petal_window_s(config)
@@ -333,10 +489,27 @@ def shortest_petal_time_factor(
 
 
 def _feasible(config: Config, k: FloatArray, factor: float) -> bool:
+    """Whether one shape is feasible at the factor. With a tube, the hairpin
+    must be feasible too (``solve_shape`` solves it first).
+
+    Near the edge of feasibility the solver sometimes fails on a feasible
+    relaxed problem. The point targets are inside the relaxed regions, so a
+    feasible hairpin proves the relaxed problem feasible: it is tried when
+    the relaxed solve fails.
+    """
     try:
-        optimize_shape(config, ShapeTargets(k=k, t_s=target_times(config, k, factor)))
-    except (ShapeOptimizationError, ValueError):
+        targets = ShapeTargets(k=k, t_s=target_times(config, k, factor))
+    except ValueError:
         return False
+    try:
+        solve_shape(config, targets, False)
+    except ShapeOptimizationError:
+        if not relaxed(config) or config.shapes.tube_cells > 0:
+            return False
+        try:
+            optimize_shape(config, targets, relax=False)
+        except ShapeOptimizationError:
+            return False
     return True
 
 

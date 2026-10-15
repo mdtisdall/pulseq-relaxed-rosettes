@@ -132,6 +132,19 @@ class ShapeConfig:
     TR, with lower gradient and slew (quieter, less stimulation). With
     ``echoes_per_tr`` > 0, every shape visits that many tips, and the petal
     times are scaled to fill the ADC window.
+
+    Relaxed targets (``docs/sample-spreading-plan.md``, step 1): with
+    ``crossing_tolerance_cells`` > 0, each crossing may pass within that many
+    k-space cells (1 / FOV) of k = 0 instead of through it. With
+    ``tip_width`` > 0, each tip of radius r is a region instead of a point:
+    the path must reach at least r along the tip direction, within
+    ``tip_width`` * r of the designed tip, so a petal can turn in a loop
+    instead of a hairpin. Relaxed paths also stay inside |k| <= k_max during
+    the ADC. ``tip_relinearizations`` re-solves with the reach constraint
+    turned toward where each tip landed (convex-concave procedure; it never
+    increases the slew energy). With ``tube_cells`` > 0, the relaxed path
+    stays within that many cells of the hairpin path (solved first, with the
+    hairpin timing calibration). All four at 0 give point targets.
     """
 
     num_shapes: int = 128
@@ -150,6 +163,10 @@ class ShapeConfig:
     spoil_moment_kmax: float = 5.0
     segment_time_margin: float = 1.1
     timing_calibration_shapes: int = 8
+    crossing_tolerance_cells: float = 0.0
+    tip_width: float = 0.0
+    tip_relinearizations: int = 0
+    tube_cells: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -396,6 +413,16 @@ def _validate(c: Config) -> list[str]:
         errors.append("shapes.echoes_per_tr must be >= 0 (0: as many as fit)")
     if not sh.segment_time_margin >= 1:
         errors.append("shapes.segment_time_margin must be >= 1")
+    for label, value in [
+        ("crossing_tolerance_cells", sh.crossing_tolerance_cells),
+        ("tip_width", sh.tip_width),
+        ("tip_relinearizations", sh.tip_relinearizations),
+        ("tube_cells", sh.tube_cells),
+    ]:
+        if value < 0:
+            errors.append(f"shapes.{label} must be >= 0")
+    if sh.tip_width >= 1:
+        errors.append("shapes.tip_width must be < 1 (a fraction of the tip radius)")
     if c.scan.num_dummy_trs < 0:
         errors.append("scan.num_dummy_trs must be >= 0")
 

@@ -11,16 +11,23 @@ from relaxed_rosettes.optimize import (
     ShapeOptimizationError,
     _optimize_one,
     _Work,
+    adc_samples,
     calibrated_petal_time_factor,
+    cells_to_kmax,
     k_weights,
     load_shapes,
     num_zero_samples,
     optimize_shape,
     optimize_shapes,
+    sample_kspace,
     shape_metrics,
+    shortest_petal_time_factor,
+    solve_shape,
+    target_kspace,
 )
 from relaxed_rosettes.system import make_opts
 from relaxed_rosettes.targets import make_shape_targets, make_targets, shape_streams
+from relaxed_rosettes.trajectory import kspace_at_times
 
 # A short TR with few echoes keeps most tests fast.
 SMALL = Config().with_overrides(
@@ -168,3 +175,77 @@ def test_infeasible_fitted_shape_drops_tips() -> None:
     shape = _optimize_one(_Work(FITTED, targets, 0, None, 0.8))
     assert shape.targets.num_echoes < targets.num_echoes
     assert shape_metrics(FITTED, shape).max_target_error_kmax < TOL
+
+
+RELAXED = SMALL.with_overrides(["shapes.crossing_tolerance_cells=1", "shapes.tip_width=0.25"])
+
+
+def slew_energy(shape: Shape) -> float:
+    return float(np.sum(np.diff(shape.g_mT_per_m, axis=0) ** 2))
+
+
+@pytest.fixture(scope="module")
+def relaxed_pair() -> tuple[Shape, Shape]:
+    """The hairpin and the relaxed waveform of the same targets."""
+    targets = make_targets(RELAXED)[0]
+    return optimize_shape(RELAXED, targets, relax=False), solve_shape(RELAXED, targets)
+
+
+def test_sample_kspace_matches_played_waveform(small_shapes: list[Shape]) -> None:
+    g = small_shapes[0].g_mT_per_m
+    raster = SMALL.system.grad_raster_time_s
+    t = (np.arange(len(g), dtype=np.float64) + 0.5) * raster
+    expected = kspace_at_times(g, raster, t) / SMALL.k_max_per_m
+    np.testing.assert_allclose(sample_kspace(SMALL, g), expected, atol=1e-12)
+
+
+def test_relaxed_shape_meets_its_regions(relaxed_pair: tuple[Shape, Shape]) -> None:
+    hairpin, shape = relaxed_pair
+    s = RELAXED.shapes
+    assert shape_metrics(RELAXED, shape).max_target_error_kmax < TOL
+    k = target_kspace(RELAXED, shape.g_mT_per_m, shape.targets)
+    tolerance = cells_to_kmax(RELAXED, s.crossing_tolerance_cells)
+    assert np.linalg.norm(k[1:-1:2], axis=1).max() <= tolerance + TOL
+    radii = np.linalg.norm(shape.targets.tips, axis=1)
+    assert np.all(np.linalg.norm(k[0:-1:2], axis=1) >= radii - TOL)
+    assert np.all(
+        np.linalg.norm(k[0:-1:2] - shape.targets.tips, axis=1) <= s.tip_width * radii + TOL
+    )
+    np.testing.assert_allclose(k[-1], shape.targets.spoil, atol=TOL)
+    adc = adc_samples(RELAXED)
+    assert np.linalg.norm(sample_kspace(RELAXED, shape.g_mT_per_m)[adc], axis=1).max() <= 1 + TOL
+    # The point targets are inside the regions, so relaxing never costs slew energy.
+    assert slew_energy(shape) < slew_energy(hairpin)
+
+
+def test_relinearization_never_increases_slew_energy(relaxed_pair: tuple[Shape, Shape]) -> None:
+    _, shape = relaxed_pair
+    config = RELAXED.with_overrides(["shapes.tip_relinearizations=2"])
+    again = solve_shape(config, shape.targets)
+    assert slew_energy(again) <= slew_energy(shape) * (1 + 1e-6)
+    assert shape_metrics(config, again).max_target_error_kmax < TOL
+
+
+def test_tube_keeps_the_path_near_the_hairpin(relaxed_pair: tuple[Shape, Shape]) -> None:
+    hairpin, shape = relaxed_pair
+    config = RELAXED.with_overrides(["shapes.tube_cells=0.5"])
+    tubed = solve_shape(config, shape.targets)
+    distance = np.linalg.norm(
+        sample_kspace(config, tubed.g_mT_per_m) - sample_kspace(config, hairpin.g_mT_per_m), axis=1
+    )
+    assert distance.max() <= cells_to_kmax(config, 0.5) + TOL
+    # Without a tube, the relaxed path goes farther.
+    free = np.linalg.norm(
+        sample_kspace(config, shape.g_mT_per_m) - sample_kspace(config, hairpin.g_mT_per_m), axis=1
+    )
+    assert free.max() > distance.max()
+
+
+def test_relaxed_targets_never_calibrate_longer_petals() -> None:
+    stream = shape_streams(FITTED)[0]
+    hairpin = shortest_petal_time_factor(FITTED, stream)
+    config = FITTED.with_overrides(["shapes.crossing_tolerance_cells=1", "shapes.tip_width=0.25"])
+    relaxed = shortest_petal_time_factor(config, stream)
+    # The relaxed problem is feasible wherever the hairpin is (the bisection
+    # uses the hairpin as proof when the relaxed solve fails).
+    assert 1.0 <= relaxed <= hairpin

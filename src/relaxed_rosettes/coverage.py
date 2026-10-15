@@ -291,6 +291,40 @@ def ktau_metrics(
     return KTauMetrics(counts=counts, tau_bin_s=tau_bin_s, early_s=early_s)
 
 
+def within_tr_redundancy(
+    k_shapes_per_m: list[FloatArray],
+    cell_per_m: float,
+    radius_cells: float = 1.0,
+    min_path_cells: float = 3.0,
+) -> FloatArray:
+    """Fraction of each shape's ADC samples that retrace an earlier part of it.
+
+    A sample is redundant when an earlier sample of the same shape is within
+    ``radius_cells`` of it and at least ``min_path_cells`` of path before it,
+    so that neighbors along the path do not count. A hairpin petal's return
+    leg and the repeated visits to k = 0 are redundant; a loop is not.
+    """
+    fractions = np.zeros(len(k_shapes_per_m))
+    for i, k in enumerate(k_shapes_per_m):
+        cells = k / cell_per_m
+        path = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(cells, axis=0), axis=1))])
+        pairs = cKDTree(cells).query_pairs(radius_cells, output_type="ndarray")
+        far = path[pairs[:, 1]] - path[pairs[:, 0]] >= min_path_cells
+        redundant = np.zeros(len(k), dtype=bool)
+        redundant[pairs[far, 1]] = True
+        fractions[i] = redundant.mean()
+    return fractions
+
+
+def format_redundancy(fractions: FloatArray) -> str:
+    """Text summary of ``within_tr_redundancy``."""
+    return (
+        f"within-TR redundancy: {np.median(fractions):.1%} of a shape's samples (median; "
+        f"{fractions.min():.1%} to {fractions.max():.1%}) are within 1 cell of an earlier "
+        "pass of the same shape"
+    )
+
+
 def format_ktau(m: KTauMetrics) -> str:
     """Text summary of the (|k|, tau) sampling."""
     shells = len(m.counts)

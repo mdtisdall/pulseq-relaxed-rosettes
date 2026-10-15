@@ -7,7 +7,13 @@ import pytest
 
 from relaxed_rosettes.cli import main
 from relaxed_rosettes.config import Config
-from relaxed_rosettes.coverage import CoverageGrid, ktau_metrics, window_metrics, window_samples
+from relaxed_rosettes.coverage import (
+    CoverageGrid,
+    ktau_metrics,
+    window_metrics,
+    window_samples,
+    within_tr_redundancy,
+)
 from relaxed_rosettes.optimize import optimize_shapes
 from relaxed_rosettes.sequence import make_schedule
 from relaxed_rosettes.trajectory import Trajectory, make_trajectory
@@ -150,3 +156,17 @@ def test_ktau_more_shapes_fill_the_plane() -> None:
         for c in (few, many)
     ]
     assert metrics[1].empty_fraction < metrics[0].empty_fraction
+
+
+def test_within_tr_redundancy_counts_retraced_samples() -> None:
+    cell = 1.0
+    s = np.linspace(0.0, 1.0, 2001)
+    # Out along x to 50 cells and straight back: the return leg retraces.
+    out = np.stack([100 * np.minimum(s, 1 - s), 0 * s, 0 * s], axis=1)
+    # Three quarters of a circle of radius 40 cells: no sample comes back
+    # near an earlier one.
+    angle = 1.5 * np.pi * s
+    circle = np.stack([40 * np.cos(angle), 40 * np.sin(angle), 0 * angle], axis=1)
+    hairpin, loop = within_tr_redundancy([out, circle], cell)
+    assert hairpin == pytest.approx(0.5, abs=0.02)
+    assert loop == 0.0
