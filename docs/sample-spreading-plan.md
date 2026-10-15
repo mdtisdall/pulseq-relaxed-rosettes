@@ -1,6 +1,6 @@
 # Spreading the samples: relaxed targets, then repulsion
 
-Status: plan only; nothing here is implemented yet. It follows the petal timing of PR #16 and uses the density models of [sampling-density.md](sampling-density.md).
+Status: step 1 is implemented (relaxed targets, the within-TR redundancy metric); steps 2 and 3 are plans. Measurements that corrected the plan are marked **Measured**. It follows the petal timing of PR #16 and uses the density models of [sampling-density.md](sampling-density.md).
 
 The run times in this plan are estimates. As each step is implemented and run, record the measured times and results in section 6, in the same PR as the step, and correct the estimates in the text where they were wrong.
 
@@ -10,6 +10,8 @@ After PR #16, each shape fits as many petals as the gradient and slew limits all
 
 - **Hairpins.** Each petal goes from $k = 0$ to a single tip point and back along almost the same line. The path must nearly stop at the tip, so it is slew-limited there: mean $|g|$ is 14.8 mT/m, about half of $g_{max}$.
 - **Retracing.** The return leg covers nearly the same radial line as the outward leg, and every $k = 0$ crossing visits the same point. Many samples add little new coverage.
+
+  **Measured (step 1):** this is much smaller than assumed. Only about 5% of a shape's samples come within one cell of an earlier pass (within-TR redundancy, section 1), for both the 19-tip and the PR #16 designs. At speed, the return leg is already more than a cell from the outward leg except near the tip.
 
 How should the trajectory be changed so that its samples spread over k-space, and over time, as evenly as the target density allows?
 
@@ -34,6 +36,8 @@ Gaps scale as (path length)$^{-1/3}$, as for any 3D sampling: twice the path gav
 
 **A metric to add.** Add **within-TR redundancy** to `coverage`: the fraction of a TR's ADC samples within one cell of an earlier sample of the same TR. It measures retracing directly. The hairpin design should score high, and steps 1 and 2 should lower it.
 
+**Measured:** implemented as `within_tr_redundancy` in `relaxed_rosettes.coverage`, and printed by `coverage`. Neighbors along the path (closer than 3 cells of path) do not count. The hairpin designs score only about 5%, and relaxed targets do not lower it (the crossings still land within a cell or two of each other).
+
 ## 2. Step 1: relaxed targets
 
 ### 2.1 Constraints
@@ -51,15 +55,17 @@ All positions are in units of $k_{max}$. $k(t)$ is linear in the gradient sample
 
 With `tip_width` = 0 and `crossing_tolerance_cells` = 0, these constraints are the current point targets, so the defaults keep today's behavior until the sweep has chosen new ones.
 
-**Why loops are faster.** A petal that is a loop through (or near) $k = 0$ can turn with a radius up to about $r/2$, instead of stopping. The largest speed on a turn of radius $\rho$ is $g = \sqrt{S \rho / \gamma}$: at $r = 1$ ($\rho = 0.5\,k_{max}$, $S$ = 100 T/m/s) that is about 24 mT/m. Path rate alone improves only about 15% over a hairpin. The bigger gain should come from the loop coming back along a different line.
+**What loops can and cannot do.** A petal that is a loop through (or near) $k = 0$ can turn with a radius up to about $r/2$, instead of stopping. The largest speed on a turn of radius $\rho$ is $g = \sqrt{S \rho / \gamma}$: at $r = 1$ ($\rho = 0.5\,k_{max}$, $S$ = 100 T/m/s) that is about 24 mT/m.
+
+**Measured, and a correction:** loops do **not** make petals shorter. The component of the path along the tip direction must still go from near 0 out to $r$ and back, under the same gradient and slew limits, so the straight-path time of `petal_times_s` remains a lower bound (up to the small crossing tolerance). A loop puts more path into a petal of the same duration. With the slew-energy objective, the optimizer has no reason to use that freedom for more path, so path per TR rises only about 3%. Rewarding path or spreading is the job of step 2. The measured gain of step 1 is elsewhere: tips that can move within their anchor spread out, which improves fine-resolution coverage (section 6).
 
 ### 2.2 Timing
 
 The petal time model of PR #16 (`petal_times_s`) assumes a straight out-and-back path, which is a lower bound only for point targets. For the relaxed problem:
 
-- **Calibrate as now, with new bounds.** Find the largest, over the calibration shapes, of the smallest feasible factor on `petal_times_s`. The search interval changes:
-  - *upper bound:* the **hairpin factor**. Every hairpin waveform meets the relaxed constraints, because a point target lies inside its region, so the hairpin timing is guaranteed feasible.
-  - *lower bound:* below 1, for example 0.5, because loops can beat the straight-path bound.
+- **Calibrate as now.** Find the largest, over the calibration shapes, of the smallest feasible factor on `petal_times_s`, by bisection from 1 (still a lower bound, see above) to the factor that fills the window.
+  - **The hairpin as proof of feasibility.** Every hairpin waveform meets the relaxed constraints, because a point target lies inside its region. Near the edge of feasibility the solver sometimes fails on a feasible relaxed problem. **Measured:** without a guard this made one calibration shape need 1.166 at `tip_width` = 0.25, against 1.061 at 0.5 for the same shape, which is impossible for nested regions. When a relaxed solve fails, the bisection now tries the hairpin at the same timing, and counts the factor feasible if the hairpin is.
+  - **Measured:** the per-shape factors fall only from about 1.09 (hairpin) to about 1.07 (`tip_width` = 0.5).
 - **Fill per shape** at `segment_time_margin` × the relaxed factor, as now.
 - **Later, optionally:** a petal time model for loops, so that the relative petal times stay accurate when `tip_width` changes.
 
@@ -96,6 +102,8 @@ Sweep a subset of the combinations rather than all 12:
 - `tip_relinearizations` ∈ {0, 2} at the best pair.
 
 That is about 8 designs. For each, report tips/TR, path/TR, mean and peak $|g|$, within-TR redundancy, the coverage gaps (including 8 mm / 0.1 s and 4 mm / 0.2 s, the short windows that the crossing ball should help), the $(|k|, \tau)$ empty cells, and `check` (slew, gradient spectrum). A design takes about 10 min (hairpin solve, calibration, relaxed solve); the sweep takes about 1.5 h.
+
+**Measured:** only the first part was run: `tip_width` ∈ {0, 0.1, 0.25, 0.5} at `crossing_tolerance_cells` = 1 (section 6). A design took 6–7.5 min (no hairpin solve is needed without a tube). A crossing tolerance of 1 cell alone changed nothing measurable, and re-linearization only lowers slew energy, so the second and third parts (other crossing tolerances, re-linearization) were not run. The defaults stay at 0; choosing new ones is left to a follow-up.
 
 ### 2.7 Risks
 
@@ -213,7 +221,16 @@ Fill this in as the work goes. Add one row for each design that is run, with the
 | step / design | PR | per-shape solve | calibration | full design (128 shapes) | `coverage` | tips/TR | path/TR | gap 4 mm / 1 s | gap 2 mm / 5 s | gap 1 mm / 30 s |
 |---|---|---|---|---|---|---|---|---|---|---|
 | baseline: fill per shape, margin 1.1 | #16 | ~13 s | ~2 min | ~6 min | ~2.7 min | 40–43 | 57 $k_{max}$ | 2.1 | 2.1 | 4.2 |
-| step 1: … | | | | | | | | | | |
+| step 1: crossings 1 cell | this PR | 13.5 s | ~3.3 min | 6.2 min | 2.9 min | 42–45 | 58 $k_{max}$ | 2.1 | 2.0 | 4.2 |
+| step 1: crossings 1 cell, `tip_width` 0.1 | this PR | 15.9 s | ~4.1 min | 7.5 min | 2.9 min | 42–45 | 58 $k_{max}$ | 2.1 | 2.1 | 4.1 |
+| step 1: crossings 1 cell, `tip_width` 0.25 | this PR | 15.8 s | ~4.0 min | 7.4 min | 2.9 min | 42–45 | 59 $k_{max}$ | 2.1 | 2.0 | 3.8 |
+| step 1: crossings 1 cell, `tip_width` 0.5 | this PR | 15.6 s | ~3.9 min | 7.3 min | 2.5 min | 42–46 | 59 $k_{max}$ | 2.1 | 2.0 | 3.7 |
+
+
+Step 1 timing: the per-shape solve is the mean over 128 shapes from the `shapes` log, measured while the previous design's `coverage` ran on one core. The calibration is the full design time less the solves (their total over 10 workers). Other step 1 measurements, same designs in the same order: mean $|g|$ 15.1, 15.1, 15.4, 15.6 mT/m (baseline 14.8); peak slew 100 T/m/s in all; gradient spectrum peak 460–480 Hz (baseline 460 Hz); gap at 8 mm / 0.1 s 2.9, 2.9, 3.1, 3.1 cells (baseline 3.1); $(|k|, \tau)$ empty cells 1.4% in all; within-TR redundancy 4.9%, 5.1%, 5.3%, 5.3% (baseline 5.5%). A relaxed solve of one full-size shape at fixed timing takes about 9 s against 4 s for the hairpin, and lowers slew energy by 9% (13% after two re-linearizations).
+
+| step / design | PR | per-shape solve | calibration | full design (128 shapes) | `coverage` | tips/TR | path/TR | gap 4 mm / 1 s | gap 2 mm / 5 s | gap 1 mm / 30 s |
+|---|---|---|---|---|---|---|---|---|---|---|
 | step 2: … | | | | | | | | | | |
 | step 3: … | | | | | | | | | | |
 

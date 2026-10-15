@@ -23,7 +23,14 @@ from relaxed_rosettes.checks import (
     timing_report,
 )
 from relaxed_rosettes.config import Config, ConfigError
-from relaxed_rosettes.coverage import format_ktau, format_metrics, ktau_metrics, window_metrics
+from relaxed_rosettes.coverage import (
+    format_ktau,
+    format_metrics,
+    format_redundancy,
+    ktau_metrics,
+    window_metrics,
+    within_tr_redundancy,
+)
 from relaxed_rosettes.optimize import (
     Shape,
     ShapeOptimizationError,
@@ -269,6 +276,10 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         tau_bins=args.tau_bins,
     )
     ktau = ktau_metrics(config, trajectory, shells=args.shells, tau_bin_s=args.tau_bin_ms * 1e-3)
+    used = np.unique(trajectory.shape_index)
+    redundancy = within_tr_redundancy(
+        [trajectory.k_shape_per_m[i] for i in used], 1.0 / config.geometry.fov_m
+    )
     if args.json:
         report = {
             "config_digest": config.digest(),
@@ -281,6 +292,7 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
                 "empty_fraction_outer_half": ktau.empty_fraction_outer_half,
                 "max_tau_gap_s": ktau.max_tau_gap_s.tolist(),
             },
+            "within_tr_redundancy": redundancy.tolist(),
             "windows_s": metrics.windows_s,
             "resolutions_m": metrics.resolutions_m.tolist(),
             "tau_bins": metrics.tau_bins,
@@ -293,6 +305,7 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         print(format_metrics(metrics))
         print()
         print(format_ktau(ktau))
+        print(format_redundancy(redundancy))
     return 0
 
 
