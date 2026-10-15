@@ -244,6 +244,13 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 1. **Does the frame potential predict reconstruction quality?** The gate for the rest: section 3 replaces the energy distance because it was misaligned, so the new objective needs the check the old one failed.
    - Setup: designs A–M of the report and a few 128-shape designs. For each, the frame potential of each requirement, and the matching linear reconstruction (section 3.1) of phantom data with noise; error and noise against the ground truth.
    - Decision: the rank correlation of frame potential with reconstruction error, against that of measure 3 and of the energy distance. If the frame potential does not predict the error better, revise the objective before optimizing it.
+   - Status: the static requirement can run with the existing code (sub-experiment 1a). The other three need reconstructions that do not exist yet: a τ-subspace CG-SENSE (relaxation 4D) and a CG-SENSE with a spline basis in T (navigator, BOLD). Add them after 1a, if 1a does not already revise the objective.
+
+   **1a. The static requirement only.** Started 2026-10-15. The first gate: the static requirement is the one where the report found the energy distance misaligned with coverage, and its model (1 mm, τ and T averaged) is what `relaxed-rosettes sense` reconstructs now.
+   - Setup: designs A–M of the report (`data/sample-spreading-2026-10-15/`) and the 128-shape designs P1 and P4 (`data/phantom-2026-10-15/`), each built with `relaxed-rosettes sequence`. For each: the static frame potential (`frame-potential --only static`); `simulate` of the default phantom with off-resonance set to zero, once without noise and once with noise; `sense` at 1 mm, with no B0 correction, of both. The ground truth is the phantom's magnetization averaged over the τ of the selected samples. Error: the NRMSE of the noiseless reconstruction against the ground truth. Noise: the RMS of the difference between the noisy and the noiseless reconstructions. The real τ variation (R2\*) stays in the data, as the model error that the static model averages over (section 3.1).
+   - Before the runs in parallel: the memory and time of the frame potential and of `sense` on one design.
+   - Decision: as for experiment 1, with the static term alone: the rank correlations with the error, and with the noise, of the static frame-potential ratio, of measure 3 at 1 mm, and of the energy distance. If the frame potential does not predict better, revise the objective before the other reconstructions are built.
+   - Results: not yet.
 2. **Do nested terms give a centre-heavy density?** Tests the hypothesis of section 3.2.
    - Setup: a radial problem, with no waveforms: choose $D(\lvert k \rvert)$ to minimize $\sum \alpha\, \text{FP}$ over the four requirements' balls at a fixed number of samples. Compare with the `exponent` and `filter` densities and the measured curve (about $\text{res}^{-2.5}$).
    - Cheap. It shows whether the requirements imply a radial density by themselves.
@@ -276,6 +283,7 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 | 2026-10-15 | The cost axis is slew energy for now; band-filtered slew energy and PNS later (report, section 5). |
 | 2026-10-15 | The example requirements of section 1 are the design target of this document. |
 | 2026-10-15 | Resolution in T means a smooth temporal basis in a continuous model, not fixed windows. |
+| 2026-10-15 | Experiment 1 starts with the static requirement alone (sub-experiment 1a), with the existing CG-SENSE; the other reconstructions come after it. |
 
 ## 9. Conclusion
 
