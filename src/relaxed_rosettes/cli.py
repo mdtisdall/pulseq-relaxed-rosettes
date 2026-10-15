@@ -39,6 +39,7 @@ from relaxed_rosettes.optimize import (
     save_shapes,
     shape_metrics,
 )
+from relaxed_rosettes.recon.config import ReconConfig
 from relaxed_rosettes.sequence import (
     Schedule,
     build_sequence,
@@ -49,7 +50,12 @@ from relaxed_rosettes.sequence import (
 )
 from relaxed_rosettes.system import make_opts
 from relaxed_rosettes.targets import ShapeTargets, make_targets, save_targets
-from relaxed_rosettes.trajectory import make_trajectory, save_trajectory, verify_trajectory
+from relaxed_rosettes.trajectory import (
+    load_trajectory,
+    make_trajectory,
+    save_trajectory,
+    verify_trajectory,
+)
 
 
 def _load_config(args: argparse.Namespace) -> Config:
@@ -83,6 +89,52 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
 def _cmd_config_show(args: argparse.Namespace) -> int:
     config = _load_config(args)
     print(f"# config digest: {config.digest()}")
+    print(config.to_toml(), end="")
+    return 0
+
+
+def _load_recon_config(args: argparse.Namespace) -> ReconConfig:
+    config = ReconConfig.load(args.recon_config) if args.recon_config else ReconConfig()
+    return config.with_overrides(args.set)
+
+
+def _add_recon_config_args(parser: argparse.ArgumentParser, *, positional: bool) -> None:
+    if positional:
+        parser.add_argument(
+            "recon_config",
+            nargs="?",
+            type=Path,
+            help="recon TOML config file (default: built-in defaults)",
+        )
+    else:
+        parser.add_argument(
+            "-c",
+            "--recon-config",
+            type=Path,
+            help="recon TOML config file (default: built-in defaults)",
+        )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="override one recon config value (repeatable), e.g. --set data.resolution_m=0.004",
+    )
+
+
+def _cmd_recon_config_init(args: argparse.Namespace) -> int:
+    path: Path = args.path
+    if path.exists() and not args.force:
+        print(f"error: {path} exists (use --force to overwrite)", file=sys.stderr)
+        return 1
+    path.write_text(ReconConfig().to_toml())
+    print(f"wrote {path}")
+    return 0
+
+
+def _cmd_recon_config_show(args: argparse.Namespace) -> int:
+    config = _load_recon_config(args)
+    print(f"# recon config digest: {config.digest()}")
     print(config.to_toml(), end="")
     return 0
 
@@ -253,6 +305,29 @@ def _cmd_to_ismrmrd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_grid(args: argparse.Namespace) -> int:
+    try:
+        from relaxed_rosettes.recon.gridding import reconstruct, save_gridding
+        from relaxed_rosettes.recon.rawdata import load_rawdata
+    except ImportError as e:
+        print(f"error: grid needs the recon extra ({e})", file=sys.stderr)
+        return 1
+    recon = _load_recon_config(args)
+    raw = load_rawdata(args.raw)
+    design, trajectory = load_trajectory(args.trajectory)
+    result = reconstruct(raw, design, trajectory, recon)
+    save_gridding(args.output, result, coil_images=args.coil_images)
+    n = result.rss.shape[0]
+    print(
+        f"wrote {args.output}: {n}^3 at {recon.data.resolution_m * 1e3:g} mm from "
+        f"{result.num_trs} TRs, {result.num_samples} samples, "
+        f"{result.coils.num_virtual_coils} virtual coils; DCF change "
+        f"{result.dcf_change[-1] if len(result.dcf_change) else 0.0:.3g} "
+        f"(recon config {recon.digest()})"
+    )
+    return 0
+
+
 def _parse_floats(text: str) -> list[float]:
     try:
         values = [float(v) for v in text.split(",")]
@@ -400,6 +475,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="acquired TRs to check against pypulseq's k-space (default: 2)",
     )
     export.set_defaults(func=_cmd_export_trajectory)
+
+    recon_config = commands.add_parser("recon-config", help="write or show a recon config")
+    recon_config_commands = recon_config.add_subparsers(dest="recon_config_command", required=True)
+    recon_init = recon_config_commands.add_parser(
+        "init", help="write a recon config file with the defaults"
+    )
+    recon_init.add_argument("path", type=Path, help="TOML file to write")
+    recon_init.add_argument("--force", action="store_true", help="overwrite an existing file")
+    recon_init.set_defaults(func=_cmd_recon_config_init)
+    recon_show = recon_config_commands.add_parser(
+        "show", help="validate a recon config and print it with all defaults filled in"
+    )
+    _add_recon_config_args(recon_show, positional=True)
+    recon_show.set_defaults(func=_cmd_recon_config_show)
+
+    grid = commands.add_parser(
+        "grid",
+        help="time-averaged gridding reconstruction of ISMRMRD raw data (recon extra)",
+    )
+    grid.add_argument("raw", type=Path, help="ISMRMRD file from `relaxed-rosettes to-ismrmrd`")
+    grid.add_argument(
+        "trajectory", type=Path, help="trajectory .npz from `relaxed-rosettes export-traj`"
+    )
+    _add_recon_config_args(grid, positional=False)
+    grid.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
+    grid.add_argument(
+        "--coil-images", action="store_true", help="also store the image of each virtual coil"
+    )
+    grid.set_defaults(func=_cmd_grid)
 
     to_ismrmrd = commands.add_parser(
         "to-ismrmrd",

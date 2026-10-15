@@ -90,6 +90,32 @@ It reads the Siemens `meas.dat` file with twixtools and checks that its header h
 
 `relaxed_rosettes.recon.rawdata.load_rawdata(path)` reads the file: the noise samples, the TR index, shape, and time stamp of each TR, and the data of any TRs on demand (`read`). `check_trajectory(config, trajectory)` fails unless the raw data and a trajectory file come from the same design.
 
+### Time-averaged gridding reconstruction
+
+Reconstruction parameters are in their own TOML config, separate from the design (one scan can be reconstructed many ways); its digest is stored in every output:
+
+```
+uv run relaxed-rosettes recon-config init recon.toml
+uv run relaxed-rosettes recon-config show recon.toml --set data.resolution_m=0.004
+```
+
+A first image, averaged over the whole scan and the whole readout:
+
+```
+uv run relaxed-rosettes grid raw.h5 traj.npz -c recon.toml -o grid.npz
+```
+
+It checks that the raw data and the trajectory come from the same design, then:
+
+- prewhitens the coils with the noise scans (the noise covariance is scaled from the noise dwell to the ADC dwell), and compresses them to `coils.virtual_coils` virtual coils (SVD of the whitened data of `coils.calibration_trs` TRs spread over the scan);
+- uses the samples inside the k-space ball of `data.resolution_m` and the window `[data.tau_min_s, data.tau_max_s]` of time since excitation, from the first `data.max_trs` TRs (0: all), streamed `data.batch_trs` TRs at a time;
+- weights them with Pipe-Menon density compensation (`dcf.iterations`; the kernel is the sinc² transform of a triangle window on a 2n³ grid, which is non-negative, so the iteration converges);
+- grids them with FINUFFT (`nufft.eps`, `nufft.upsampling`, `nufft.threads`).
+
+The `.npz` file has `rss` (n³, root sum of squares), `coil_images` (with `--coil-images`), `coil_matrix` (prewhitening then compression), `noise_covariance`, `singular_values`, `dcf_change`, and the recon and design config digests. Image axis `i` is physical gradient axis `i` (pypulseq x, y, z), and index `j` is at `(j - n // 2) * resolution_m` from the isocenter. With the 45 ms readout, off-resonance blurs this image; a narrower τ window reduces the blur.
+
+The recon uses NumPy and FINUFFT on the CPU. FINUFFT cannot share a process with PyTorch on macOS (both wheels bundle an OpenMP runtime), so the recon does not use PyTorch.
+
 ## Tip-radius density
 
 Where the petal tips are, in radius, decides how samples spread over k-space. `shapes.tip_density` chooses how the radii are distributed:
