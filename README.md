@@ -102,6 +102,17 @@ uv run relaxed-rosettes simulate phantom.toml relaxed_rosettes.seq -o sim.h5
 
 The phantom (`relaxed_rosettes.recon.phantom`) is a set of compartments (`[[compartment]]`): uniform ellipsoids and Gaussian blobs, each with a proton density, R2*, and off-resonance. A compartment `inside` another replaces that one's tissue within its shape; otherwise compartments add. `[[sine]]` and `[[blocks]]` (periodic, raised-cosine edges) tables change a compartment's density (relative), R2* (1/s), or off-resonance (Hz) over scan time. The signal is the closed-form Fourier transform of each compartment times `ρ exp(-R2* τ + 2πi Δf τ)` at each sample's τ and scan time, so it is exact (no NUFFT, no time segmentation). Coils have constant complex sensitivities (`coil_sensitivity_real`, `coil_sensitivity_imag`); the noise is white, with standard deviation `noise_relative` times the signal at k = 0, τ = 0 in each of the real and imaginary parts, and `noise_readouts` noise-only readouts at the ADC dwell. The data are seeded from `seed`. The header also has the phantom TOML and its digest. The default phantom is a head-sized ellipsoid with ventricles, small spheres of 1.5–4 mm radius, a Gaussian blob, a vessel pulsing at 1.1 and 2.2 Hz, and a BOLD region whose R2* falls by 0.6/s in 20 s blocks every 40 s; it has no off-resonance. A full default design takes a few minutes.
 
+### Frame potential of the coverage requirements
+
+How well a design conditions the linear reconstruction of each coverage requirement (needs the `recon` extra; see [docs/example-requirements-design.md](docs/example-requirements-design.md), section 3):
+
+```
+uv run relaxed-rosettes requirements init requirements.toml
+uv run relaxed-rosettes frame-potential relaxed_rosettes.seq -r requirements.toml
+```
+
+A requirement (`[[requirement]]`) is a resolution, a τ model (`tau_rank = 0`: averaged; `L`: a rank-`L` decay basis over `[r2star_min_per_s, r2star_max_per_s]`), a scan-time model (`scan_time_width_s = 0`: averaged; `W`: hat functions `W` apart), and an optional Hann `taper` of the samples by `|k|`. Its model is voxels of that resolution over the field of view, times those bases, fitted to the samples inside its k-space ball (no coils, no off-resonance). The command reports, for each requirement, the frame potential `||A Aᴴ||²` of the forward operator as the scale-free ratio `N ||A Aᴴ||² / trace(A Aᴴ)²` (`N` coefficients): the mean squared eigenvalue of `Aᴴ A` over the squared mean, 1 for a tight frame, and the coefficient of variation of the eigenvalues. The ball does not fill the band of the cubic grid, so the ratio has an offset that is the same for every design. It is computed as a triangle-weighted energy of a type-1 NUFFT of the samples onto a grid of twice the size (one channel per pair of τ basis functions; one NUFFT per hat function for terms local in scan time). The default requirements are the four examples of the design document, with placeholder values; `--only NAME` evaluates one, `--json` prints the numbers.
+
 `relaxed_rosettes.recon.basis.decay_basis` builds an orthonormal basis of `exp(-R2* τ)` over a range of R2*, on the τ of the ADC samples, for reconstructions that resolve τ: the leading singular vectors of the normalized curves, with the rank fixed or the smallest that represents every curve to a relative tolerance.
 
 ### Time-averaged gridding reconstruction

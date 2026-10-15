@@ -360,6 +360,87 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_requirements_init(args: argparse.Namespace) -> int:
+    from relaxed_rosettes.recon.framepotential import RequirementsConfig
+
+    path: Path = args.path
+    if path.exists() and not args.force:
+        print(f"error: {path} exists (use --force to overwrite)", file=sys.stderr)
+        return 1
+    path.write_text(RequirementsConfig().to_toml())
+    print(f"wrote {path}")
+    return 0
+
+
+def _cmd_requirements_show(args: argparse.Namespace) -> int:
+    from relaxed_rosettes.recon.framepotential import RequirementsConfig
+
+    config = (
+        RequirementsConfig.load(args.requirements) if args.requirements else RequirementsConfig()
+    )
+    print(f"# requirements digest: {config.digest()}")
+    print(config.to_toml(), end="")
+    return 0
+
+
+def _cmd_frame_potential(args: argparse.Namespace) -> int:
+    try:
+        from relaxed_rosettes.recon.framepotential import (
+            RequirementsConfig,
+            format_frame_potentials,
+            frame_potential,
+        )
+    except ImportError as e:
+        print(f"error: frame-potential needs the recon extra ({e})", file=sys.stderr)
+        return 1
+    config = (
+        RequirementsConfig.load(args.requirements) if args.requirements else RequirementsConfig()
+    )
+    _, design, schedule, shapes = _load_seq_and_design(args.seq)
+    trajectory = make_trajectory(design, schedule, shapes)
+    names = set(args.only) if args.only else None
+    results = [
+        frame_potential(
+            r,
+            trajectory,
+            design.geometry.fov_m,
+            eps=config.eps,
+            threads=config.threads,
+            batch_trs=config.batch_trs,
+        )
+        for r in config.requirements
+        if names is None or r.name in names
+    ]
+    if names is not None and len(results) != len(names):
+        unknown = names - {r.requirement.name for r in results}
+        print(f"error: unknown requirement(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+        return 1
+    if args.json:
+        report = {
+            "config_digest": design.digest(),
+            "requirements_digest": config.digest(),
+            "requirements": [
+                {
+                    "name": r.requirement.name,
+                    "frame_potential": r.frame_potential,
+                    "trace": r.trace,
+                    "coefficients": r.coefficients,
+                    "samples": r.samples,
+                    "ratio": r.ratio,
+                    "cv": r.cv,
+                }
+                for r in results
+            ],
+        }
+        print(json.dumps(report, indent=2))
+    else:
+        print(
+            f"# config {design.digest()}, requirements {config.digest()}\n"
+            + format_frame_potentials(results)
+        )
+    return 0
+
+
 def _cmd_grid(args: argparse.Namespace) -> int:
     try:
         from relaxed_rosettes.recon.gridding import reconstruct, save_gridding
@@ -669,6 +750,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not store the k-space trajectory in each acquisition",
     )
     simulate.set_defaults(func=_cmd_simulate)
+
+    requirements = commands.add_parser(
+        "requirements", help="write or show the coverage requirements for `frame-potential`"
+    )
+    requirements_commands = requirements.add_subparsers(dest="requirements_command", required=True)
+    requirements_init = requirements_commands.add_parser(
+        "init", help="write a requirements file with the example requirements"
+    )
+    requirements_init.add_argument("path", type=Path, help="TOML file to write")
+    requirements_init.add_argument(
+        "--force", action="store_true", help="overwrite an existing file"
+    )
+    requirements_init.set_defaults(func=_cmd_requirements_init)
+    requirements_show = requirements_commands.add_parser(
+        "show", help="validate a requirements file and print it with all defaults filled in"
+    )
+    requirements_show.add_argument(
+        "requirements",
+        nargs="?",
+        type=Path,
+        help="requirements TOML file (default: the example requirements)",
+    )
+    requirements_show.set_defaults(func=_cmd_requirements_show)
+
+    frame = commands.add_parser(
+        "frame-potential",
+        help="frame potential of each requirement's reconstruction model (recon extra)",
+    )
+    frame.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
+    frame.add_argument(
+        "-r",
+        "--requirements",
+        type=Path,
+        help="requirements TOML file (default: the example requirements)",
+    )
+    frame.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="evaluate only this requirement (repeatable)",
+    )
+    frame.add_argument("--json", action="store_true", help="print the results as JSON")
+    frame.set_defaults(func=_cmd_frame_potential)
 
     coverage = commands.add_parser(
         "coverage",

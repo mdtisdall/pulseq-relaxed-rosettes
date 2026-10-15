@@ -32,10 +32,9 @@ ADC phase is applied (no RF phase), without concomitant fields.
 
 from __future__ import annotations
 
-import json
 import tomllib
 from collections.abc import Iterator
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -45,6 +44,13 @@ from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
 from relaxed_rosettes.config import ConfigError, digest_of
+from relaxed_rosettes.recon.tomltables import (
+    check_value,
+    float_list,
+    plain_table,
+    table_item,
+    toml_value,
+)
 from relaxed_rosettes.trajectory import Trajectory
 
 FloatArray = NDArray[np.float64]
@@ -236,7 +242,7 @@ class PhantomConfig:
             "coil_sensitivity_imag": list(self.coil_sensitivity_imag),
         }
         for key, items in _TABLES.items():
-            data[key] = [_plain(item) for item in getattr(self, items[0])]
+            data[key] = [plain_table(item) for item in getattr(self, items[0])]
         return data
 
     def digest(self) -> str:
@@ -246,11 +252,11 @@ class PhantomConfig:
     def to_toml(self) -> str:
         """TOML text that ``from_toml`` reads back into an equal config."""
         data = self.to_dict()
-        lines = [f"{k} = {_toml(v)}" for k, v in data.items() if k not in _TABLES]
+        lines = [f"{k} = {toml_value(v)}" for k, v in data.items() if k not in _TABLES]
         for key in _TABLES:
             for table in data[key]:
                 lines += ["", f"[[{key}]]"]
-                lines += [f"{k} = {_toml(v)}" for k, v in table.items()]
+                lines += [f"{k} = {toml_value(v)}" for k, v in table.items()]
         return "\n".join(lines) + "\n"
 
     @classmethod
@@ -261,20 +267,20 @@ class PhantomConfig:
         kwargs: dict[str, Any] = {}
         for name in ("seed", "noise_readouts"):
             if name in data:
-                kwargs[name] = _check(name, data.pop(name), int)
+                kwargs[name] = check_value(name, data.pop(name), int)
         if "noise_relative" in data:
             kwargs["noise_relative"] = float(
-                _check("noise_relative", data.pop("noise_relative"), float)
+                check_value("noise_relative", data.pop("noise_relative"), float)
             )
         for name in ("coil_sensitivity_real", "coil_sensitivity_imag"):
             if name in data:
-                kwargs[name] = tuple(_floats(name, data.pop(name), None))
+                kwargs[name] = tuple(float_list(name, data.pop(name), None))
         if any(key in data for key in _TABLES):
             for key, (attr, item_cls) in _TABLES.items():
                 tables = data.pop(key, [])
                 if not isinstance(tables, list):
                     raise ConfigError(f"[[{key}]] must be an array of tables")
-                kwargs[attr] = tuple(_item(key, item_cls, t) for t in tables)
+                kwargs[attr] = tuple(table_item(key, item_cls, t, _ENUMS) for t in tables)
         if data:
             raise ConfigError(f"unknown key(s): {', '.join(sorted(data))}")
         return cls(**kwargs)
@@ -433,74 +439,7 @@ _TABLES: dict[str, tuple[str, type]] = {
     "sine": ("sines", Sine),
     "blocks": ("blocks", Blocks),
 }
-
-
-def _plain(item: Any) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for f in fields(item):
-        value = getattr(item, f.name)
-        if isinstance(value, StrEnum):
-            value = value.value
-        elif isinstance(value, tuple):
-            value = list(value)
-        out[f.name] = value
-    return out
-
-
-def _toml(value: Any) -> str:
-    if isinstance(value, list):
-        return "[" + ", ".join(_toml(v) for v in value) + "]"
-    if isinstance(value, str):
-        return json.dumps(value)
-    if isinstance(value, float):
-        return repr(value)
-    return str(value)
-
-
-def _check(name: str, value: Any, kind: type) -> Any:
-    if kind is float and isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if not isinstance(value, kind) or isinstance(value, bool):
-        raise ConfigError(f"{name} must be {kind.__name__} (got {value!r})")
-    return value
-
-
-def _floats(name: str, value: Any, length: int | None) -> list[float]:
-    if not isinstance(value, list) or (length is not None and len(value) != length):
-        size = "" if length is None else f" of {length}"
-        raise ConfigError(f"{name} must be a list{size} numbers")
-    return [float(_check(name, v, float)) for v in value]
-
-
-def _item(key: str, cls: type, table: Any) -> Any:
-    if not isinstance(table, dict):
-        raise ConfigError(f"[[{key}]] must be an array of tables")
-    table = dict(table)
-    kwargs: dict[str, Any] = {}
-    for f in fields(cls):
-        if f.name not in table:
-            continue
-        value = table.pop(f.name)
-        label = f"{key}.{f.name}"
-        if f.type == "str":
-            kwargs[f.name] = _check(label, value, str)
-        elif f.type == "float":
-            kwargs[f.name] = float(_check(label, value, float))
-        elif f.type.startswith("tuple"):
-            kwargs[f.name] = tuple(_floats(label, value, 3))
-        else:
-            enum = {"CompartmentShape": CompartmentShape, "Property": Property}[str(f.type)]
-            try:
-                kwargs[f.name] = enum(_check(label, value, str))
-            except ValueError as e:
-                options = ", ".join(m.value for m in enum)
-                raise ConfigError(f"{label} must be one of {options} (got {value!r})") from e
-    if table:
-        raise ConfigError(f"unknown key(s) in [[{key}]]: {', '.join(sorted(table))}")
-    try:
-        return cls(**kwargs)
-    except TypeError as e:
-        raise ConfigError(f"[[{key}]] is missing a required key ({e})") from e
+_ENUMS: dict[str, type[StrEnum]] = {"CompartmentShape": CompartmentShape, "Property": Property}
 
 
 def _validate(c: PhantomConfig) -> list[str]:
