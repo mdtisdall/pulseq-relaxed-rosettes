@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import cvxpy as cp
 import numpy as np
 import pypulseq as pp
 import pytest
@@ -9,6 +10,8 @@ from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
 from relaxed_rosettes.optimize import (
     Shape,
     ShapeOptimizationError,
+    _edge_kspace,
+    _kspace_variable,
     _optimize_one,
     _Work,
     adc_samples,
@@ -57,6 +60,19 @@ def test_k_weights_integrate_played_waveform(edge: int) -> None:
     t = np.union1d(t_points[t_points < edge], [edge])
     integral = np.trapezoid(np.interp(t, t_points, g_points), t)
     assert k_weights(n, edge) @ g == pytest.approx(integral, abs=1e-8)
+
+
+def test_kspace_variable_matches_cumulative_sum() -> None:
+    n = SMALL.raster_points_per_tr
+    g = cp.Variable((n, 3))
+    k, constraints = _kspace_variable(SMALL, g)
+    g.value = np.random.default_rng(0).standard_normal((n, 3))
+    k.value = sample_kspace(SMALL, g.value)
+    assert all(c.violation().max() < 1e-12 for c in constraints)
+    edges = np.array([1, 2, 57, n - 1, n])
+    expected = np.stack([k_weights(n, e) for e in edges]) @ g.value
+    expected *= SMALL.k_max_per_m**-1 * GAMMA_HZ_PER_T * 1e-3 * SMALL.system.grad_raster_time_s
+    np.testing.assert_allclose(_edge_kspace(SMALL, k, g, edges).value, expected, atol=1e-12)
 
 
 def test_small_shapes_meet_constraints(small_shapes: list[Shape]) -> None:
