@@ -42,7 +42,17 @@ Optimize the gradient waveform of every shape (minimum slew energy, with the gra
 uv run relaxed-rosettes shapes design.toml -o shapes.npz
 ```
 
-Each shape is a convex problem, solved with cvxpy and Clarabel, in parallel (`--jobs`, default: the CPU count). The `.npz` file has `g_mT_per_m` (shapes × raster points × 3, sampled at the raster centers, as a pypulseq arbitrary gradient with `first = last = 0`), the targets, and the config.
+Each shape is a convex problem, solved with cvxpy and Clarabel, in parallel (`--jobs`, default: the CPU count). Clarabel and the linear-algebra libraries may start several threads in each worker process for little gain; with `RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1` in the environment, `--jobs N` uses N cores (measured: one solve used 3.3 cores without the limits, 1 with them, in the same time).
+
+To keep the gradients out of the coil's acoustic resonances, set `gradients.penalty_bands_hz` (`[[low, high], ...]` in Hz) or pass the gradient system file, which replaces them with its resonances:
+
+```
+uv run relaxed-rosettes shapes design.toml --asc MP_GradSys_....asc -o shapes.npz
+```
+
+The optimizer then adds `gradients.band_penalty_weight` (default 100) times the slew energy at the band frequencies, each band widened by `gradients.penalty_band_margin_hz` (default 50 Hz) on both sides, because a spectrum measured over a 50 ms window spreads each frequency by about ±40 Hz. The band energy is a sum of squares of linear functions of the slew (Parseval, over one TR's DFT oversampled 4×), kept in a reduced basis (the SVD of the band frequencies, the Slepian directions of the bands), so each shape stays a convex quadratic problem. The penalty removes what the targets do not need: the main frequency of a shape is set by its target timing, so keep it away from the bands with `shapes.segment_time_margin` (slower petals, fewer per TR). The table that `shapes` prints has the fraction of each shape's gradient energy in the bands. The penalty costs solve time (one full-size shape: about 5 s instead of 0.6 s) and pushes the waveforms toward the gradient limit, which raises PNS: check every design. With the resonances in the config, the shapes, design, trajectory, and ISMRMRD files all contain them. Measured on the phantom designs (128 shapes; `docs/basis-quality-test-plan.md`): the 1 mm design at margin 1.5 has 0.6% of its gradient energy in the bands (2.3% in the worst shape), against 38% without the penalty, with 30–33 instead of 40–43 petals per TR, better coverage at 1 mm and slightly worse at 4 mm, and PNS up from 62% to 80%; the 4 mm design needs weight 300 at margin 2.0 (1.0%, worst 2.2%).
+
+The `.npz` file has `g_mT_per_m` (shapes × raster points × 3, sampled at the raster centers, as a pypulseq arbitrary gradient with `first = last = 0`), the targets, and the config.
 
 Build the `.seq` file from the optimized shapes:
 
@@ -58,7 +68,7 @@ Check the sequence:
 uv run relaxed-rosettes check relaxed_rosettes.seq --asc MP_GPA_....asc --band 500:700
 ```
 
-It reports pypulseq's timing check; the peak gradient and slew per physical axis over every TR; whether the ADC dwell meets Nyquist along the path at the peak gradient; the gradient spectrum peak and its level in each `--band` (Hz; e.g. the scanner's acoustic resonances); and, with the scanner's gradient `.asc` file, the peak PNS (SAFE model). The spectrum and PNS cover the first `--trs` acquired TRs (default 100). `--json` prints the report as JSON. It exits with status 1 if timing, Nyquist, or PNS fails.
+It reports pypulseq's timing check; the peak gradient and slew per physical axis over every TR; whether the ADC dwell meets Nyquist along the path at the peak gradient; the gradient spectrum peak and its level in each `--band` (Hz; e.g. the scanner's acoustic resonances; by default the resonances in `--asc`, else the design's penalty bands); and, with the scanner's gradient `.asc` file, the peak PNS (SAFE model). The spectrum and PNS cover the first `--trs` acquired TRs (default 100). `--json` prints the report as JSON. It exits with status 1 if timing, Nyquist, or PNS fails.
 
 Export the k-space trajectory at the ADC samples, for reconstruction:
 
