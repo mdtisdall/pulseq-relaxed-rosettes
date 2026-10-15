@@ -6,3 +6,6 @@
 .worktrees/
 # Siemens gradient system files: confidential, never commit (data/README.md)
 data/*.asc
+# Local results, designs and sequences (data/<topic>-<date>/); data/README.md is not ignored
+data/*
+!data/README.md
