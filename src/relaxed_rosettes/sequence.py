@@ -23,7 +23,7 @@ from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config, RfPhase
 from relaxed_rosettes.optimize import Shape
 from relaxed_rosettes.rotations import acquired_schedule, dummy_schedule
 from relaxed_rosettes.system import make_opts
-from relaxed_rosettes.targets import ShapeTargets
+from relaxed_rosettes.targets import stack_targets, unstack_targets
 
 SCHEDULE_STREAM = 1
 """Mixed into the seed for the schedule's random stream, which is then
@@ -178,9 +178,11 @@ def save_design(path: Path, config: Config, schedule: Schedule, shapes: list[Sha
     ``rotation_matrix`` (TRs, 3, 3; physical = R @ shape gradient),
     ``rf_phase_rad`` (also the ADC phase), ``acquired``. Shape arrays:
     ``g_mT_per_m`` (shapes, raster points, 3), the targets ``k`` (shapes,
-    targets, 3; units of k_max) and ``t_s``. And ``config_toml``,
+    targets, 3; units of k_max) and ``t_s``, both NaN-padded
+    (``relaxed_rosettes.targets.stack_targets``). And ``config_toml``,
     ``config_digest``.
     """
+    k, t_s = stack_targets([s.targets for s in shapes])
     np.savez(
         path,
         shape_index=schedule.shape_index,
@@ -188,8 +190,8 @@ def save_design(path: Path, config: Config, schedule: Schedule, shapes: list[Sha
         rf_phase_rad=schedule.rf_phase_rad,
         acquired=schedule.acquired,
         g_mT_per_m=np.stack([s.g_mT_per_m for s in shapes]),
-        k=np.stack([s.targets.k for s in shapes]),
-        t_s=np.stack([s.targets.t_s for s in shapes]),
+        k=k,
+        t_s=t_s,
         config_toml=config.to_toml(),
         config_digest=config.digest(),
     )
@@ -210,10 +212,12 @@ def load_design(path: Path) -> tuple[Config, Schedule, list[Shape]]:
         shapes = [
             Shape(
                 g_mT_per_m=g,
-                targets=ShapeTargets(k=k, t_s=t),
+                targets=targets,
                 status="optimal",
                 solve_time_s=float("nan"),
             )
-            for g, k, t in zip(data["g_mT_per_m"], data["k"], data["t_s"], strict=True)
+            for g, targets in zip(
+                data["g_mT_per_m"], unstack_targets(data["k"], data["t_s"]), strict=True
+            )
         ]
     return config, schedule, shapes

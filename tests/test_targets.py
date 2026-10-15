@@ -9,13 +9,22 @@ from relaxed_rosettes.targets import (
     ShapeTargets,
     blue_noise_1d,
     blue_noise_directions,
+    fitted_num_tips,
     load_targets,
     make_targets,
-    target_times,
+    petal_times_s,
+    petal_window_s,
+    save_targets,
+    shape_streams,
+    stack_targets,
+    unstack_targets,
 )
 
 # Fewer shapes keep the tests fast; each shape is independent of the count.
-CONFIG = Config().with_overrides(["shapes.num_shapes=4"])
+# A fixed tip count needs no calibration against the shape optimizer.
+CONFIG = Config().with_overrides(["shapes.num_shapes=4", "shapes.echoes_per_tr=19"])
+FITTED = Config().with_overrides(["shapes.num_shapes=8"])
+FACTOR = 1.1
 
 
 @pytest.fixture(scope="module")
@@ -64,20 +73,70 @@ def test_times(targets: list[ShapeTargets]) -> None:
 def test_shapes_differ_in_crossing_times(targets: list[ShapeTargets]) -> None:
     crossings = np.stack([shape.crossing_times_s for shape in targets])
     assert len({tuple(c) for c in crossings}) == len(targets)
-    # Including the last crossing, which sets the spoil segment. (Two shapes
-    # may round to the same raster point, so check that it moves at all.)
-    assert np.ptp(crossings[:, -1]) > 10 * CONFIG.system.grad_raster_time_s
+    # The petals fill the window: the last crossing is at its end.
+    _, end = petal_window_s(CONFIG)
+    np.testing.assert_allclose(crossings[:, -1], end, atol=CONFIG.system.grad_raster_time_s)
 
 
-def test_without_jitter_time_follows_sqrt_radius() -> None:
-    config = CONFIG.with_overrides(["shapes.timing_jitter=0"])
-    shape = make_targets(config)[0]
-    t = target_times(config, shape.k, np.random.default_rng(0))
-    durations = np.diff(t[:-1])  # segments 1 .. 2E-1, each from a target to the next
-    radii = np.repeat(np.linalg.norm(shape.tips, axis=1), 2)[1:]
-    ratio = durations / np.sqrt(radii)
-    raster = config.system.grad_raster_time_s
-    np.testing.assert_allclose(ratio, ratio.mean(), atol=2 * raster / np.sqrt(radii).min())
+def test_petal_time_follows_petal_model(targets: list[ShapeTargets]) -> None:
+    raster = CONFIG.system.grad_raster_time_s
+    for shape in targets:
+        petals = np.diff(np.concatenate([[shape.t_s[0]], shape.crossing_times_s]))[1:]
+        model = petal_times_s(CONFIG, np.linalg.norm(shape.tips, axis=1))[1:]
+        ratio = petals / model
+        np.testing.assert_allclose(ratio, ratio.mean(), atol=2 * raster / model.min())
+
+
+def test_petal_times_regimes() -> None:
+    g = CONFIG.gradients
+    speed = 42.576e6 * g.max_grad_mT_per_m * 1e-3 / CONFIG.k_max_per_m
+    accel = 42.576e6 * g.max_slew_T_per_m_per_s / CONFIG.k_max_per_m
+    full = speed**2 / (2 * accel)
+    assert 0.3 < full < 0.4  # at the default limits
+    # Slew-limited below full speed: time proportional to sqrt(radius).
+    small = petal_times_s(CONFIG, np.array([full / 4, full]))
+    assert small[1] / small[0] == pytest.approx(2.0)
+    # Continuous at full speed, then linear at 2 / speed per unit radius.
+    t = petal_times_s(CONFIG, np.array([full - 1e-9, full + 1e-9, 0.8, 1.0]))
+    assert t[0] == pytest.approx(t[1])
+    assert (t[3] - t[2]) / 0.2 == pytest.approx(2 / speed)
+
+
+def test_fitted_tips_fill_the_window() -> None:
+    targets = make_targets(FITTED, petal_time_factor=FACTOR)
+    start, end = petal_window_s(FITTED)
+    factor = FITTED.shapes.segment_time_margin * FACTOR
+    counts = [t.num_echoes for t in targets]
+    assert len(set(counts)) > 1  # the counts differ between shapes
+    assert 30 < np.mean(counts) < 60
+    for t, stream in zip(targets, shape_streams(FITTED), strict=True):
+        shortest = petal_times_s(FITTED, np.linalg.norm(t.tips, axis=1))
+        assert factor * shortest.sum() <= end - start
+        assert fitted_num_tips(FITTED, stream, factor) == t.num_echoes
+        # Each petal gets at least margin * factor times its shortest time.
+        petals = np.diff(np.concatenate([[start], t.crossing_times_s]))
+        assert np.all(petals >= factor * shortest - 2 * FITTED.system.grad_raster_time_s)
+
+
+def test_larger_margin_fits_fewer_tips() -> None:
+    quiet = FITTED.with_overrides(["shapes.segment_time_margin=1.5"])
+
+    def mean_count(config: Config) -> float:
+        return float(np.mean([t.num_echoes for t in make_targets(config, None, FACTOR)]))
+
+    assert mean_count(quiet) < 0.8 * mean_count(FITTED)
+
+
+def test_stack_round_trip_with_different_counts(tmp_path: Path) -> None:
+    targets = make_targets(FITTED, petal_time_factor=FACTOR)
+    k, t_s = stack_targets(targets)
+    assert k.shape == (len(targets), max(len(t.t_s) for t in targets), 3)
+    path = tmp_path / "targets.npz"
+    save_targets(path, FITTED, targets)
+    _, loaded = load_targets(path)
+    for a, b in zip([*unstack_targets(k, t_s), *loaded], [*targets, *targets], strict=True):
+        np.testing.assert_array_equal(a.k, b.k)
+        np.testing.assert_array_equal(a.t_s, b.t_s)
 
 
 def test_reproducible_and_independent_of_shape_count(targets: list[ShapeTargets]) -> None:
@@ -91,9 +150,10 @@ def test_reproducible_and_independent_of_shape_count(targets: list[ShapeTargets]
 
 def test_cli_writes_loadable_file(tmp_path: Path) -> None:
     path = tmp_path / "targets.npz"
-    assert main(["targets", "--set", "shapes.num_shapes=2", "-o", str(path)]) == 0
+    overrides = ["shapes.num_shapes=2", "shapes.echoes_per_tr=19"]
+    assert main(["targets", *[a for o in overrides for a in ("--set", o)], "-o", str(path)]) == 0
     config, loaded = load_targets(path)
-    assert config == Config().with_overrides(["shapes.num_shapes=2"])
+    assert config == Config().with_overrides(overrides)
     for a, b in zip(loaded, make_targets(config), strict=True):
         np.testing.assert_array_equal(a.k, b.k)
         np.testing.assert_array_equal(a.t_s, b.t_s)

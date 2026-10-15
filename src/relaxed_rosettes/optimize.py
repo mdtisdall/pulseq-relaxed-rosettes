@@ -24,6 +24,7 @@ import dataclasses
 import math
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,13 +41,32 @@ from relaxed_rosettes.density import (
     survival_from_profile,
     target_profile,
 )
-from relaxed_rosettes.targets import ShapeTargets, make_targets
+from relaxed_rosettes.targets import (
+    PROVISIONAL_PETAL_TIME_FACTOR,
+    ShapeTargets,
+    fitted_num_tips,
+    make_shape_targets,
+    make_targets,
+    petal_times_s,
+    petal_window_s,
+    shape_streams,
+    stack_targets,
+    target_positions,
+    target_times,
+    unstack_targets,
+)
 
 FloatArray = NDArray[np.float64]
 
 LIMIT_MARGIN = 1e-4
 """The optimizer uses the gradient and slew limits reduced by this fraction,
 so that solver tolerance never puts a waveform over a limit."""
+
+TIMING_CALIBRATION_STEPS = 6
+"""Bisection steps for the shortest feasible petal time factor of a shape."""
+
+MAX_TIP_RETRIES = 3
+"""Tips a shape may drop, one at a time, when its fitted targets are infeasible."""
 
 
 class ShapeOptimizationError(RuntimeError):
@@ -157,7 +177,11 @@ def optimize_shape(config: Config, targets: ShapeTargets) -> Shape:
     ]
     problem = cp.Problem(cp.Minimize(cp.sum_squares(slew)), constraints)
     start = time.perf_counter()
-    problem.solve(solver=cp.CLARABEL)
+    try:
+        problem.solve(solver=cp.CLARABEL)
+    except cp.error.SolverError as e:
+        # Clarabel can fail outright on problems at the edge of feasibility.
+        raise ShapeOptimizationError(f"solver failed: {e}") from None
     elapsed = time.perf_counter() - start
     if problem.status != cp.OPTIMAL or g.value is None:
         raise ShapeOptimizationError(f"solver status: {problem.status}")
@@ -199,33 +223,142 @@ def shape_metrics(config: Config, shape: Shape) -> ShapeMetrics:
     )
 
 
-def _optimize_one(args: tuple[Config, ShapeTargets, int]) -> Shape:
-    config, targets, index = args
-    try:
-        return optimize_shape(config, targets)
-    except ShapeOptimizationError as e:
-        raise ShapeOptimizationError(f"shape {index}: {e}") from None
+@dataclass(frozen=True)
+class _Work:
+    """One shape to optimize, and how to make it again with fewer tips."""
+
+    config: Config
+    targets: ShapeTargets
+    index: int
+    survival: TipSurvival | None = None
+    petal_time_factor: float | None = None
+    """The factor that fitted the tips; None when the tip count is fixed."""
+
+
+def _optimize_one(work: _Work) -> Shape:
+    """Optimize one shape. Fitted targets (``echoes_per_tr`` = 0) that are
+    infeasible are made again with one tip fewer, up to ``MAX_TIP_RETRIES``
+    times: the calibrated petal time factor holds for most shapes, not all.
+    """
+    targets = work.targets
+    retries = MAX_TIP_RETRIES if work.petal_time_factor is not None else 0
+    stream = shape_streams(work.config)[work.index] if retries else None
+    for attempt in range(retries + 1):
+        try:
+            return optimize_shape(work.config, targets)
+        except ShapeOptimizationError as e:
+            if attempt == retries or targets.num_echoes == 1:
+                raise ShapeOptimizationError(f"shape {work.index}: {e}") from None
+        assert stream is not None and work.petal_time_factor is not None
+        targets = make_shape_targets(
+            work.config,
+            stream,
+            work.survival,
+            work.petal_time_factor,
+            num_tips=targets.num_echoes - 1,
+        )
+    raise AssertionError("unreachable")
 
 
 def optimize_shapes(config: Config, jobs: int | None = None) -> list[Shape]:
     """Targets and optimized waveforms of every shape, solved in parallel.
 
     ``jobs`` is the number of worker processes (default: the CPU count, at
-    most the number of shapes); 1 solves in this process.
+    most the number of shapes); 1 solves in this process. A derived tip
+    density is calibrated first, then (with ``echoes_per_tr`` = 0) the petal
+    time factor.
     """
     survival = None
     if config.shapes.tip_density is not TipDensity.POWER:
         survival = calibrated_survival(config, jobs)
-    return _optimize_targets(config, make_targets(config, survival), jobs)
+    factor = None
+    if config.shapes.echoes_per_tr == 0:
+        factor = calibrated_petal_time_factor(config, survival, jobs)
+    targets = make_targets(config, survival, factor or PROVISIONAL_PETAL_TIME_FACTOR)
+    return _optimize_targets(config, targets, jobs, survival, factor)
 
 
-def _optimize_targets(config: Config, targets: list[ShapeTargets], jobs: int | None) -> list[Shape]:
-    work = [(config, t, i) for i, t in enumerate(targets)]
-    jobs = min(jobs or os.cpu_count() or 1, len(work))
+def _optimize_targets(
+    config: Config,
+    targets: list[ShapeTargets],
+    jobs: int | None,
+    survival: TipSurvival | None = None,
+    petal_time_factor: float | None = None,
+) -> list[Shape]:
+    work = [_Work(config, t, i, survival, petal_time_factor) for i, t in enumerate(targets)]
+    return _parallel_map(_optimize_one, work, jobs)
+
+
+def _parallel_map[T, R](fn: Callable[[T], R], items: list[T], jobs: int | None) -> list[R]:
+    jobs = min(jobs or os.cpu_count() or 1, len(items))
     if jobs == 1:
-        return [_optimize_one(w) for w in work]
+        return [fn(item) for item in items]
     with ProcessPoolExecutor(max_workers=jobs) as pool:
-        return list(pool.map(_optimize_one, work))
+        return list(pool.map(fn, items))
+
+
+def shortest_petal_time_factor(
+    config: Config, stream: np.random.SeedSequence, survival: TipSurvival | None = None
+) -> float:
+    """Smallest factor on ``petal_times_s`` at which one shape is feasible.
+
+    The shape gets the tips that fit at ``segment_time_margin`` times
+    ``PROVISIONAL_PETAL_TIME_FACTOR``, packed from the start of the petal
+    window at the factor, with the rest of the window going to the path out
+    to the spoil moment. The factor is found by bisection between 1 (the
+    straight-path bound, never beaten) and the factor that fills the window,
+    to ``TIMING_CALIBRATION_STEPS`` halvings.
+    """
+    s = config.shapes
+    start, end = petal_window_s(config)
+    n = fitted_num_tips(
+        config, stream, s.segment_time_margin * PROVISIONAL_PETAL_TIME_FACTOR, survival
+    )
+    while True:
+        k = target_positions(config, np.random.default_rng(stream), n, survival)
+        high = (end - start) / petal_times_s(config, np.linalg.norm(k[0:-1:2], axis=1)).sum()
+        if _feasible(config, k, high):
+            break
+        if n == 1:
+            raise ShapeOptimizationError("one petal is infeasible even when it fills the window")
+        n -= 1
+    low = 1.0
+    for _ in range(TIMING_CALIBRATION_STEPS):
+        mid = (low + high) / 2
+        if _feasible(config, k, mid):
+            high = mid
+        else:
+            low = mid
+    return high
+
+
+def _feasible(config: Config, k: FloatArray, factor: float) -> bool:
+    try:
+        optimize_shape(config, ShapeTargets(k=k, t_s=target_times(config, k, factor)))
+    except (ShapeOptimizationError, ValueError):
+        return False
+    return True
+
+
+def _shortest_factor_one(args: tuple[Config, np.random.SeedSequence, TipSurvival | None]) -> float:
+    return shortest_petal_time_factor(*args)
+
+
+def calibrated_petal_time_factor(
+    config: Config, survival: TipSurvival | None = None, jobs: int | None = None
+) -> float:
+    """The petal time factor: the largest ``shortest_petal_time_factor`` of the
+    first ``timing_calibration_shapes`` shapes.
+
+    The straight out-and-back petal of ``petal_times_s`` is a lower bound;
+    the optimizer needs a little more, because the path turns at k = 0
+    between petals (about 1.1 at the default limits, the same within ±2.5%
+    for every shape). With the largest of the calibration shapes, nearly all
+    shapes are feasible at ``segment_time_margin`` = 1.
+    """
+    streams = shape_streams(config)[: config.shapes.timing_calibration_shapes]
+    factors = _parallel_map(_shortest_factor_one, [(config, st, survival) for st in streams], jobs)
+    return max(factors)
 
 
 def calibrated_survival(config: Config, jobs: int | None = None) -> TipSurvival:
@@ -251,8 +384,12 @@ def calibrated_survival(config: Config, jobs: int | None = None) -> TipSurvival:
         config.adc_start_s + (np.arange(r.adc_num_samples) + 0.5) * r.adc_dwell_s,
         dtype=np.float64,
     )
+    # The speed estimate needs only roughly right timing, so the petal time
+    # factor is not calibrated yet.
+    factor = PROVISIONAL_PETAL_TIME_FACTOR if s.echoes_per_tr == 0 else None
     for _ in range(s.calibration_iterations):
-        shapes = _optimize_targets(calibration, make_targets(calibration, survival), jobs)
+        targets = make_targets(calibration, survival, PROVISIONAL_PETAL_TIME_FACTOR)
+        shapes = _optimize_targets(calibration, targets, jobs, survival, factor)
         samples = [
             np.linalg.norm(
                 kspace_at_times(sh.g_mT_per_m, config.system.grad_raster_time_s, adc_times),
@@ -270,15 +407,16 @@ def save_shapes(path: Path, config: Config, shapes: list[Shape]) -> None:
     """Write shapes and the config that made them to an ``.npz`` file.
 
     Arrays: ``g_mT_per_m`` (shapes, raster points, 3), the targets ``k``
-    (shapes, targets, 3; units of k_max) and ``t_s`` (shapes, targets),
-    ``status`` and ``solve_time_s`` (shapes), ``config_toml``, and
-    ``config_digest``.
+    (shapes, targets, 3; units of k_max) and ``t_s`` (shapes, targets), both
+    NaN-padded (``relaxed_rosettes.targets.stack_targets``), ``status`` and
+    ``solve_time_s`` (shapes), ``config_toml``, and ``config_digest``.
     """
+    k, t_s = stack_targets([s.targets for s in shapes])
     np.savez(
         path,
         g_mT_per_m=np.stack([s.g_mT_per_m for s in shapes]),
-        k=np.stack([s.targets.k for s in shapes]),
-        t_s=np.stack([s.targets.t_s for s in shapes]),
+        k=k,
+        t_s=t_s,
         status=np.array([s.status for s in shapes]),
         solve_time_s=np.array([s.solve_time_s for s in shapes]),
         config_toml=config.to_toml(),
@@ -295,14 +433,13 @@ def load_shapes(path: Path) -> tuple[Config, list[Shape]]:
         shapes = [
             Shape(
                 g_mT_per_m=g,
-                targets=ShapeTargets(k=k, t_s=t),
+                targets=targets,
                 status=str(status),
                 solve_time_s=float(solve_time),
             )
-            for g, k, t, status, solve_time in zip(
+            for g, targets, status, solve_time in zip(
                 data["g_mT_per_m"],
-                data["k"],
-                data["t_s"],
+                unstack_targets(data["k"], data["t_s"]),
                 data["status"],
                 data["solve_time_s"],
                 strict=True,
