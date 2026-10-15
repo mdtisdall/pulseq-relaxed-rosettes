@@ -221,30 +221,13 @@ def optimize_shape(
     """
     s = config.shapes
     relax = relaxed(config) if relax is None else relax
-    n = config.raster_points_per_tr
-    n_zero = num_zero_samples(config)
-
-    g = cp.Variable((n, 3))
-    slew = g[1:] - g[:-1]
-    k_samples, constraints = _kspace_variable(config, g)
-    constraints += [
-        g[:n_zero] == 0,
-        g[n - 1] == 0,
-        cp.norm(g, 2, axis=1) <= config.gradients.max_grad_mT_per_m * (1 - LIMIT_MARGIN),
-        cp.norm(slew, 2, axis=1) <= slew_limits(config) * (1 - LIMIT_MARGIN),
-    ]
-    k_targets = _edge_kspace(config, k_samples, g, target_edges(config, targets))
-    if not relax:
-        constraints.append(k_targets == targets.k)
-    else:
-        constraints += _relaxed_target_constraints(config, targets, k_targets, tip_directions)
-        adc = adc_samples(config)
-        constraints.append(cp.norm(k_samples[adc], 2, axis=1) <= 1.0)
-        if reference_g is not None and s.tube_cells > 0:
-            tube = cells_to_kmax(config, s.tube_cells)
-            reference = sample_kspace(config, reference_g)
-            constraints.append(cp.norm(k_samples - reference, 2, axis=1) <= tube)
-    problem = cp.Problem(cp.Minimize(cp.sum_squares(slew)), constraints)
+    g = cp.Variable((config.raster_points_per_tr, 3))
+    k, constraints = waveform_constraints(config, targets, g, relax, tip_directions)
+    if relax and reference_g is not None and s.tube_cells > 0:
+        tube = cells_to_kmax(config, s.tube_cells)
+        reference = sample_kspace(config, reference_g)
+        constraints.append(cp.norm(k - reference, 2, axis=1) <= tube)
+    problem = cp.Problem(cp.Minimize(cp.sum_squares(g[1:] - g[:-1])), constraints)
     start = time.perf_counter()
     try:
         problem.solve(solver=cp.CLARABEL)
@@ -260,6 +243,33 @@ def optimize_shape(
         status=str(problem.status),
         solve_time_s=elapsed,
     )
+
+
+def waveform_constraints(
+    config: Config,
+    targets: ShapeTargets,
+    g: cp.Variable,
+    relax: bool,
+    tip_directions: FloatArray | None = None,
+) -> tuple[cp.Variable, list[cp.Constraint]]:
+    """The constraints of ``optimize_shape`` on ``g``, without the tube, and
+    the variable of k at the gradient sample times (``_kspace_variable``)."""
+    n = config.raster_points_per_tr
+    slew = g[1:] - g[:-1]
+    k, constraints = _kspace_variable(config, g)
+    constraints += [
+        g[: num_zero_samples(config)] == 0,
+        g[n - 1] == 0,
+        cp.norm(g, 2, axis=1) <= config.gradients.max_grad_mT_per_m * (1 - LIMIT_MARGIN),
+        cp.norm(slew, 2, axis=1) <= slew_limits(config) * (1 - LIMIT_MARGIN),
+    ]
+    k_targets = _edge_kspace(config, k, g, target_edges(config, targets))
+    if not relax:
+        constraints.append(k_targets == targets.k)
+        return k, constraints
+    constraints += _relaxed_target_constraints(config, targets, k_targets, tip_directions)
+    constraints.append(cp.norm(k[adc_samples(config)], 2, axis=1) <= 1.0)
+    return k, constraints
 
 
 def _kspace_variable(config: Config, g: cp.Variable) -> tuple[cp.Variable, list[cp.Constraint]]:
@@ -423,7 +433,18 @@ class _Work:
 
 
 def _optimize_one(work: _Work) -> Shape:
-    """Optimize one shape. Fitted targets (``echoes_per_tr`` = 0) that are
+    """Optimize one shape, then spread its samples (``repulsion_iterations``)."""
+    shape = _solve_one(work)
+    if work.config.shapes.repulsion_iterations > 0:
+        # Imported here: the repulsion module builds on this one.
+        from relaxed_rosettes.repulsion import repel_shape
+
+        shape, _ = repel_shape(work.config, shape)
+    return shape
+
+
+def _solve_one(work: _Work) -> Shape:
+    """Solve one shape. Fitted targets (``echoes_per_tr`` = 0) that are
     infeasible are made again with one tip fewer, up to ``MAX_TIP_RETRIES``
     times: the calibrated petal time factor holds for most shapes, not all.
     """

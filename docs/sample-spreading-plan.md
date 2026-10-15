@@ -1,6 +1,6 @@
 # Spreading the samples: relaxed targets, then repulsion
 
-Status: step 1 is implemented (relaxed targets, the within-TR redundancy metric); steps 2 and 3 are plans. Measurements that corrected the plan are marked **Measured**. It follows the petal timing of PR #16 and uses the density models of [sampling-density.md](sampling-density.md).
+Status: steps 1 and 2 are implemented (step 1: relaxed targets and the within-TR redundancy metric; step 2: repulsion within each shape, off by default, `repulsion_iterations` = 0); step 3 is a plan. Measurements that corrected the plan are marked **Measured**. It follows the petal timing of PR #16 and uses the density models of [sampling-density.md](sampling-density.md).
 
 The run times in this plan are estimates. As each step is implemented and run, record the measured times and results in section 6, in the same PR as the step, and correct the estimates in the text where they were wrong.
 
@@ -126,8 +126,11 @@ $$
 At a minimum, the samples follow $\rho$ with blue-noise spacing.
 
 - **The samples** are the ADC samples of one shape, $M \approx 14\,000$. $x = B g$ for a fixed sparse matrix $B$: linear interpolation of the cumulative sum at the sample times.
-- **The target** $\rho$ comes from `density.py`: the sample profile $n(\rho)$ of the `exponent` or `filter` model, turned into a volumetric density. It is isotropic, so the attraction depends only on $\lVert x_m \rVert$. Precompute $\varphi(r) = \int \lVert x - y \rVert \rho(y)\, dy$ for $\lVert x \rVert = r$ on a radial grid, once per config. The attraction gradient is then $\varphi'(r)\, x/r$, which costs almost nothing.
-- **The repulsion gradient** is $\sum_n (x_m - x_n)/\lVert x_m - x_n \rVert$. For one shape this is about $2 \times 10^8$ pair terms, about 1–2 s in chunked NumPy. Fast summation is not needed until step 3.
+- **The target** $\rho$ is isotropic, so the attraction depends only on $\lVert x_m \rVert$. **Implemented** as a mixture of thin shells, for which $\varphi(r) = \int \lVert x - y \rVert \rho(y)\, dy$ is analytic: the mean distance from radius $r$ to a uniform point on the sphere of radius $s$ is $\max(r, s) + \min(r, s)^2 / (3 \max(r, s))$. The attraction gradient is $\varphi'(r)\, x/r$, which costs almost nothing. `repulsion_target` chooses the shells:
+  - `initial` (default): each shape's own radial histogram of samples, in 40 shells. The samples spread without moving in radius, and this works with every `tip_density`.
+  - `model`: the sample profile $n(\rho)$ of the `exponent` or `filter` model of `density.py`, on its radial grid.
+- **The repulsion gradient** is $\sum_n (x_m - x_n)/\lVert x_m - x_n \rVert$. For one shape this is about $2 \times 10^8$ pair terms. **Measured:** 0.37 s per energy and gradient on one thread (blocks of 512 from the Gram matrix, each pair once; 0.64 s without the symmetry). Fast summation is not needed until step 3.
+- **The samples** are exact: an ADC sample a fraction $f$ of a raster after gradient sample $i$ is $k_i$ plus the integral of the piecewise-linear $g$ from there. Linear interpolation of $k$ between gradient samples is off by up to about 0.014 cells at full slew.
 - **Optional τ weighting.** Multiply each pair term by $w(|\tau_m - \tau_n|)$, so that samples close in time since excitation repel more strongly. This spreads the $(|k|, \tau)$ sampling for the relaxation dimension. Start without it ($w \equiv 1$) and add it as a variant.
 
 ### 3.2 Sequential convex programming
@@ -143,10 +146,13 @@ $$
 \qquad (2)
 $$
 
-- **Accept or reject.** Accept the step if the true $F$ decreases by at least a fixed fraction of the predicted decrease. Then double $\delta_j$ (up to a cap). Otherwise reject the step and halve $\delta_j$.
+- **Accept or reject.** The merit is $\lambda F + $ slew energy, the objective of (2) with the true $F$. Accept the step if the merit decreases by at least 10% of the decrease that the linear model predicts. The trust region follows the ratio $r$ of actual to predicted decrease: halve $\delta_j$ if $r < 0.25$ (or the solve fails), double it (up to 8 cells) if $r > 0.75$, and keep it otherwise. **Measured:** doubling on every accepted step, as first planned, made $\delta_j$ alternate between a size that was accepted with $r \approx 0.1$–0.2 and twice that size, which was rejected with $r < 0$; about half the steps were wasted (10 of 20 accepted, against 14–18 with the ratio rule). The linear model is good only up to about 1–2 cells, the spacing of consecutive samples at full speed.
+- **Inaccurate solves.** Clarabel sometimes ends a large trust-region step `optimal_inaccurate`. That waveform may miss a constraint, so it counts as a failed solve.
 - **Stop** when the relative decrease falls below a tolerance, or after `repulsion_iterations` steps.
 - **Every iterate is a feasible waveform.** In SPARKLING the hardware constraints are met only through a projection, whereas here they hold exactly at every step.
-- **The trust region** has the same form as the tube of section 2.4, centered on the current iterate instead of on the hairpin.
+- **The trust region** has the same form as the tube of section 2.4, centered on the current iterate instead of on the hairpin, at the gradient samples in the ADC.
+- **Built from constants at every step.** **Measured:** with cvxpy parameters (compiled once), the parameter-to-data maps of one full-size shape grew beyond 12 GB in the first step, and a 16-shape run with 5 workers used all memory. With constants and the sparse $k$ variable of PR #21, building the problem is a small part of the about 2 s that each subproblem takes.
+- **The tube** of section 2.4 is not supported with repulsion (`tube_cells` must be 0).
 - **The slew-energy term** keeps the waveforms smooth. $\lambda$ sets the balance between spreading and smoothness.
 - **Timing and tip count** are those of step 1 and are not changed in step 2.
 
@@ -155,20 +161,22 @@ The step 1 solution is the starting point (the "core shape"). Because $F$ is not
 ### 3.3 What stays a constraint
 
 - **Crossings stay** as the ball $\lVert k(t_c) \rVert \le \varepsilon_c$. Repulsion pushes samples out of the crowded center, so without this constraint the navigator echoes would drift away.
-- **Tips are a choice.** One variant keeps the tip anchors, so the blue-noise tip design still sets the coarse structure. The other drops them and lets the attraction to $\rho$ set the radial density. If the second works, it replaces the tip-radius machinery for this purpose.
+- **Tips are a choice.** One variant keeps the tip anchors, so the blue-noise tip design still sets the coarse structure. The other drops them and lets the attraction to $\rho$ set the radial density. If the second works, it replaces the tip-radius machinery for this purpose. **Implemented:** the anchors are kept, and each step re-linearizes the reach constraint at the current tips (section 2.3), so the current iterate is always feasible. Dropping them is left for later.
 
 ### 3.4 Config
 
 | field | default | meaning |
 |---|---|---|
 | `repulsion_iterations` | 0 (off) | maximum SCP steps |
-| `repulsion_weight` | to tune | $\lambda$ in (2) |
-| `repulsion_trust_cells` | to tune | initial $\delta$, in cells |
-| `repulsion_tau_width_s` | 0 (off) | width of the τ weighting |
+| `repulsion_weight` | 1 | $\lambda$ in (2), relative: at 1, a full first step along $\nabla F$ is worth about the shape's slew energy |
+| `repulsion_trust_cells` | 2 | initial $\delta$, in cells |
+| `repulsion_target` | `initial` | `initial` or `model` (section 3.1) |
+
+The τ weighting (`repulsion_tau_width_s`) is not implemented yet.
 
 ### 3.5 Cost and gate
 
-- **Cost:** each step takes about 1–2 s for the gradient and about 10–20 s for the SOCP. At an estimated 20 steps, that is about 5 min per shape, or about 65 min per design for 128 shapes on 10 cores. Tuning $\lambda$ and $\delta$ will take several designs.
+- **Cost:** each step takes about 1–2 s for the gradient and about 10–20 s for the SOCP. At an estimated 20 steps, that is about 5 min per shape, or about 65 min per design for 128 shapes on 10 cores. Tuning $\lambda$ and $\delta$ will take several designs. **Measured:** a step takes 2.3–3.3 s in all (building and solving the subproblem 1.8–2.5 s on average, the rest mostly the energy), so 20 steps take 45–66 s per shape. Repulsion of 16 shapes took 3–4 min with 5 workers, at about 0.4 GB per worker; for 128 shapes that is about 10–15 min on 10 workers (not run).
 - **Gate:** go on to step 3 only if step 2 lowers the gaps clearly beyond the path-length law of section 1, at short windows as well as long ones. For example, at least 10% better than step 1 at the same path length.
 
 ## 4. Step 3: repulsion between shapes, weighted by scan time
@@ -210,7 +218,7 @@ Optimize one shape at a time, keeping the others fixed. For shape $s$, the energ
 Open decisions:
 
 - **Navigator tolerance** (`crossing_tolerance_cells`): how close to $k = 0$ must the crossings stay for the navigator and B0 analysis?
-- **Tip anchors in step 2:** keep the blue-noise tips, or let the density alone set the radii?
+- **Tip anchors in step 2:** keep the blue-noise tips, or let the density alone set the radii? Step 2 keeps them for now (section 3.3).
 - **Acoustics and PNS:** every step makes the gradients busier. Each chosen design needs `check --band` and `check --asc` (Cima.X) before scanning.
 - **Measured trajectories:** with eddy currents, the actual trajectory (from a gradient impulse response) is what matters. This plan designs the nominal trajectory. The recon uses the measured one.
 
@@ -231,8 +239,22 @@ Step 1 timing: the per-shape solve is the mean over 128 shapes from the `shapes`
 
 | step / design | PR | per-shape solve | calibration | full design (128 shapes) | `coverage` | tips/TR | path/TR | gap 4 mm / 1 s | gap 2 mm / 5 s | gap 1 mm / 30 s |
 |---|---|---|---|---|---|---|---|---|---|---|
-| step 2: … | | | | | | | | | | |
+| step 2, 16 shapes: step 1 base (crossings 1 cell, `tip_width` 0.5) | this PR | 2.0 s | — | 60 s (16 shapes, 5 workers) | 2.8 min | 42–45 | 59.3 $k_{max}$ | 2.1 | 2.0 | 3.8 |
+| step 2, 16 shapes: `repulsion_weight` 0.5, 20 steps, doubling rule | this PR | + 59 s | — | + 3.9 min (repulsion) | 3.4 min | 42–45 | 59.1 $k_{max}$ | 2.1 | 2.0 | 3.9 |
+| step 2, 16 shapes: weight 1, doubling rule | this PR | + 66 s | — | + 4.1 min | 2.5 min | 42–45 | 60.0 $k_{max}$ | 2.1 | 2.0 | 3.7 |
+| step 2, 16 shapes: weight 3, doubling rule | this PR | + 48 s | — | + 3.1 min | 2.6 min | 42–45 | 61.6 $k_{max}$ | 2.0 | 2.0 | 3.5 |
+| step 2, 16 shapes: weight 3, ratio rule (as implemented) | this PR | + 45 s | — | + 2.9 min | 2.4 min | 42–45 | 61.8 $k_{max}$ | 2.0 | 2.0 | 3.5 |
 | step 3: … | | | | | | | | | | |
+
+Step 2 measurements (10-core Mac, 64 GB, 5 workers, while another session's job used about 6 cores). The step 2 rows are 16-shape designs, so their gaps are larger than those of the 128-shape rows above. The repulsion times are added to the base design's. The base design is the step 1 configuration with the sparse $k$ of PR #21; its per-shape solve is 2.0 s against 15.6 s before. Each repulsion run starts from the same base shapes. With weight 0.5 / 1 / 3 (doubling rule) and 3 (ratio rule):
+
+- slew energy +0.9% / +6.0% / +18.5% / +18.4%; peak slew 100 T/m/s and target violations ≤ 3e-9 in all;
+- energy distance to the target −78% / −80% / −83% / −85%;
+- within-TR redundancy 4.1% / 3.6% / 3.3% / 3.3% (base 5.9%); $(|k|, \tau)$ empty cells 3.9% / 3.9% / 3.6% / 3.7% (base 3.4%);
+- gap at 1 mm: 0.1 s 39.2 / 38.5 / 37.7 / 37.1 (base 43.0); 1 s 18.2 / 17.7 / 17.2 / 17.0 (base 18.4); 5 s 9.2 / 8.9 / 8.5 / 8.4 (base 9.2); 30 s 3.9 / 3.7 / 3.5 / 3.5 (base 3.8);
+- gap at 0.1 s: 8 mm 2.9 / 2.8 / 2.8 / 2.8 (base 3.3); 2 mm 13.1 / 12.7 / 12.4 / 12.2 (base 15.3).
+
+Against the gate of section 3.5: path per TR grows by at most 4%, which explains only about 1.4% of a gap change (section 1), so the gains come from spreading. With the ratio rule at weight 3, 0.1 s windows improve by 14–20% (8 mm 15%, 2 mm 20%, 1 mm 14%): this passes the gate. Windows of 0.2 s and longer improve by 8–9% at 1 mm and little at coarser resolutions: this is just short of it. The step 2 prototype (16 shapes, weight 1, a step accepted on any decrease of $F$, slew energy +10–15%) reached 3.3 at 1 mm / 30 s. Untested: weights above 3 (weight 3 uses 18% of a slew budget of about 30%), more than 20 steps ($F$ was still falling at step 20), the `model` target, and a full 128-shape design. The defaults stay off.
 
 ## References
 

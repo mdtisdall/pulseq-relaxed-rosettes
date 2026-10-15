@@ -36,6 +36,13 @@ class TipDensity(StrEnum):
     FILTER = "filter"
 
 
+class RepulsionTarget(StrEnum):
+    """Target radial density of the repulsion (``relaxed_rosettes.repulsion``)."""
+
+    INITIAL = "initial"
+    MODEL = "model"
+
+
 @dataclass(frozen=True)
 class SystemConfig:
     """Scanner limits and timing, passed to ``pypulseq.Opts``."""
@@ -145,6 +152,19 @@ class ShapeConfig:
     increases the slew energy). With ``tube_cells`` > 0, the relaxed path
     stays within that many cells of the hairpin path (solved first, with the
     hairpin timing calibration). All four at 0 give point targets.
+
+    Repulsion (step 2 of the plan, ``relaxed_rosettes.repulsion``): with
+    ``repulsion_iterations`` > 0, each solved shape is then spread by at most
+    that many trust-region steps that lower the energy distance between its
+    ADC samples and a target radial density, at the cost of slew energy.
+    ``repulsion_weight`` scales the energy against the slew energy (1: a full
+    first step in the energy gradient is worth about the shape's slew energy),
+    and ``repulsion_trust_cells`` is the first trust region, in k-space cells.
+    ``repulsion_target`` is ``initial`` (each shape's own radial sample
+    histogram, so the samples spread without moving in radius) or ``model``
+    (the profile of ``tip_density``, which must then be ``exponent`` or
+    ``filter``). Every step keeps all the constraints of the solved shape,
+    except the tube.
     """
 
     num_shapes: int = 128
@@ -167,6 +187,10 @@ class ShapeConfig:
     tip_width: float = 0.0
     tip_relinearizations: int = 0
     tube_cells: float = 0.0
+    repulsion_iterations: int = 0
+    repulsion_weight: float = 1.0
+    repulsion_trust_cells: float = 2.0
+    repulsion_target: RepulsionTarget = RepulsionTarget.INITIAL
 
 
 @dataclass(frozen=True)
@@ -453,11 +477,21 @@ def _validate(c: Config) -> list[str]:
         ("tip_width", sh.tip_width),
         ("tip_relinearizations", sh.tip_relinearizations),
         ("tube_cells", sh.tube_cells),
+        ("repulsion_iterations", sh.repulsion_iterations),
     ]:
         if value < 0:
             errors.append(f"shapes.{label} must be >= 0")
     if sh.tip_width >= 1:
         errors.append("shapes.tip_width must be < 1 (a fraction of the tip radius)")
+    if sh.repulsion_iterations > 0:
+        if not sh.repulsion_weight > 0:
+            errors.append("shapes.repulsion_weight must be > 0")
+        if not sh.repulsion_trust_cells > 0:
+            errors.append("shapes.repulsion_trust_cells must be > 0")
+        if sh.tube_cells > 0:
+            errors.append("shapes.repulsion_iterations > 0 does not support shapes.tube_cells")
+        if sh.repulsion_target is RepulsionTarget.MODEL and not derived:
+            errors.append("shapes.repulsion_target = model needs tip_density exponent or filter")
     if c.scan.num_dummy_trs < 0:
         errors.append("scan.num_dummy_trs must be >= 0")
 
