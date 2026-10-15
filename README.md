@@ -90,6 +90,20 @@ It reads the Siemens `meas.dat` file with twixtools and checks that its header h
 
 `relaxed_rosettes.recon.rawdata.load_rawdata(path)` reads the file: the noise samples, the TR index, shape, and time stamp of each TR, and the data of any TRs on demand (`read`). `check_trajectory(config, trajectory)` fails unless the raw data and a trajectory file come from the same design.
 
+### Simulated scans
+
+A simulated scan of an analytic phantom, in the same ISMRMRD layout (needs the `recon` extra):
+
+```
+uv run relaxed-rosettes phantom init phantom.toml
+uv run relaxed-rosettes phantom show phantom.toml
+uv run relaxed-rosettes simulate phantom.toml relaxed_rosettes.seq -o sim.h5
+```
+
+The phantom (`relaxed_rosettes.recon.phantom`) is a set of compartments (`[[compartment]]`): uniform ellipsoids and Gaussian blobs, each with a proton density, R2*, and off-resonance. A compartment `inside` another replaces that one's tissue within its shape; otherwise compartments add. `[[sine]]` and `[[blocks]]` (periodic, raised-cosine edges) tables change a compartment's density (relative), R2* (1/s), or off-resonance (Hz) over scan time. The signal is the closed-form Fourier transform of each compartment times `ρ exp(-R2* τ + 2πi Δf τ)` at each sample's τ and scan time, so it is exact (no NUFFT, no time segmentation). Coils have constant complex sensitivities (`coil_sensitivity_real`, `coil_sensitivity_imag`); the noise is white, with standard deviation `noise_relative` times the signal at k = 0, τ = 0 in each of the real and imaginary parts, and `noise_readouts` noise-only readouts at the ADC dwell. The data are seeded from `seed`. The header also has the phantom TOML and its digest. The default phantom is a head-sized ellipsoid with ventricles, small spheres of 1.5–4 mm radius, a Gaussian blob, a vessel pulsing at 1.1 and 2.2 Hz, and a BOLD region whose R2* falls by 0.6/s in 20 s blocks every 40 s; it has no off-resonance. A full default design takes a few minutes.
+
+`relaxed_rosettes.recon.basis.decay_basis` builds an orthonormal basis of `exp(-R2* τ)` over a range of R2*, on the τ of the ADC samples, for reconstructions that resolve τ: the leading singular vectors of the normalized curves, with the rank fixed or the smallest that represents every curve to a relative tolerance.
+
 ### Time-averaged gridding reconstruction
 
 Reconstruction parameters are in their own TOML config, separate from the design (one scan can be reconstructed many ways); its digest is stored in every output:

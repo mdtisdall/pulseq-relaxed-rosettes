@@ -1,8 +1,9 @@
-"""ISMRMRD raw data of a relaxed rosette scan: writing from twix, and loading.
+"""ISMRMRD raw data of a relaxed rosette scan: writing from twix or a simulation, and loading.
 
 The reconstruction reads only ISMRMRD. ``write_ismrmrd`` writes one
 acquisition for each acquired TR, in order, with its ADC segments joined, and
-one for each noise scan (flag ``ACQ_IS_NOISE_MEASUREMENT``). In a TR
+one for each noise scan (flag ``ACQ_IS_NOISE_MEASUREMENT``).
+``write_simulated_ismrmrd`` writes simulated data in the same layout. In a TR
 acquisition:
 
 - ``scan_counter`` is the acquired TR number (0, 1, ...), ``user_int[0]`` its
@@ -16,6 +17,9 @@ acquisition:
 - ``position`` and the direction vectors come from the MDH slice data, as
   ``siemens_to_ismrmrd`` sets them.
 
+In a simulation, the time stamps are the TR start times, ``position`` is 0,
+and the directions are the gradient axes.
+
 The XML header has the design config (TOML) and its digest, and the
 ``.seq`` signature, as user parameters, so ``load_rawdata`` can check a file
 against a trajectory. No patient information is copied from the twix header.
@@ -23,7 +27,7 @@ against a trajectory. No patient information is copied from the twix header.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,11 +41,15 @@ from numpy.typing import NDArray
 
 from relaxed_rosettes.config import GAMMA_HZ_PER_T, Config
 from relaxed_rosettes.recon.twix import TIMESTAMP_TICK_S, TwixScan
+from relaxed_rosettes.sequence import check_adc_segments
+from relaxed_rosettes.system import make_opts
 from relaxed_rosettes.trajectory import Trajectory
 
 CONFIG_TOML = "relaxed_rosettes_config_toml"
 CONFIG_DIGEST = "relaxed_rosettes_config_digest"
 SEQ_SIGNATURE = "pulseq_signature_md5"
+PHANTOM_TOML = "relaxed_rosettes_phantom_toml"
+PHANTOM_DIGEST = "relaxed_rosettes_phantom_digest"
 TRAJECTORY_UNITS = "trajectory_units"
 ADC_SEGMENTS = "adc_segments_per_tr"
 TIMESTAMP_TICK = "time_stamp_tick_s"
@@ -108,8 +116,21 @@ def write_ismrmrd(
         raise ValueError("the raw data has no TRs")
     segments = len(twix.readouts[0].segments)
 
+    frequency = twix.header_value("Dicom", "lFrequency")
+    field_strength = twix.header_value("Dicom", "flMagneticFieldStrength")
+    model = twix.header_value("Dicom", "ManufacturersModelName")
+    xml = _xml_header(
+        config,
+        signature,
+        segments,
+        coils=twix.num_coils,
+        vendor="Siemens",
+        frequency_hz=frequency if isinstance(frequency, int) else None,
+        field_strength_T=float(field_strength) if isinstance(field_strength, float | int) else None,
+        model=model if isinstance(model, str) else None,
+    )
     with ismrmrd.Dataset(str(path), "dataset", mode="w-") as dataset:
-        dataset.write_xml_header(_xml_header(config, twix, signature, segments))
+        dataset.write_xml_header(xml)
         for noise in twix.noise:
             data = noise.data()
             acq = ismrmrd.Acquisition.from_array(data)
@@ -163,7 +184,92 @@ def _head_from_mdh(head: Any, mdh: Any) -> Any:
     return head
 
 
-def _xml_header(config: Config, twix: TwixScan, signature: str, segments: int) -> str:
+def write_simulated_ismrmrd(
+    path: Path,
+    config: Config,
+    trajectory: Trajectory,
+    signature: str,
+    readouts: Iterable[ComplexArray],
+    noise: list[ComplexArray],
+    *,
+    extra_strings: dict[str, str] | None = None,
+    embed_trajectory: bool = True,
+) -> int:
+    """Write simulated data of a design to a new ISMRMRD file; return the coil count.
+
+    ``readouts`` gives the (coils, samples) data of every acquired TR of the
+    trajectory, in order; ``noise`` the noise readouts, at the ADC dwell.
+    ``extra_strings`` are added to the header as user parameters.
+    """
+    expected = len(trajectory.tr_index)
+    segments, _ = check_adc_segments(config, make_opts(config))
+    fov = config.geometry.fov_m
+    coils = 0
+    with ismrmrd.Dataset(str(path), "dataset", mode="w-") as dataset:
+        acquisitions = []
+        for data in noise:
+            acq = ismrmrd.Acquisition.from_array(data)
+            _set_simulated_head(acq, 0.0)
+            acq.set_flag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+            acq.sample_time_us = config.readout.adc_dwell_s * 1e6
+            acquisitions.append(acq)
+        a = -1
+        for a, data in enumerate(readouts):
+            if a >= expected:
+                raise ValueError(f"more simulated TRs than the design's {expected}")
+            if a == 0:
+                coils = data.shape[0]
+                xml = _xml_header(
+                    config,
+                    signature,
+                    segments,
+                    coils=coils,
+                    vendor="relaxed_rosettes simulation",
+                    frequency_hz=None,
+                    field_strength_T=config.system.B0_T,
+                    model=None,
+                    extra_strings=extra_strings,
+                )
+                dataset.write_xml_header(xml)
+                for noise_acq in acquisitions:
+                    dataset.append_acquisition(noise_acq)
+            traj = None
+            if embed_trajectory:
+                k = trajectory.k_per_m(np.array([a]))[0]
+                traj = (k * fov).astype(np.float32)
+            acq = ismrmrd.Acquisition.from_array(data, traj)
+            _set_simulated_head(acq, float(trajectory.tr_start_s[a]))
+            acq.scan_counter = a
+            acq.sample_time_us = config.readout.adc_dwell_s * 1e6
+            acq.user_int[0] = int(trajectory.tr_index[a])
+            acq.user_int[1] = int(trajectory.shape_index[a])
+            if a == expected - 1:
+                acq.set_flag(ismrmrd.ACQ_LAST_IN_MEASUREMENT)
+            dataset.append_acquisition(acq)
+        if a != expected - 1:
+            raise ValueError(f"simulated {a + 1} TRs, but the design acquires {expected}")
+    return coils
+
+
+def _set_simulated_head(acq: Any, time_s: float) -> None:
+    acq.acquisition_time_stamp = round(time_s / TIMESTAMP_TICK_S)
+    acq.read_dir[:] = [1.0, 0.0, 0.0]
+    acq.phase_dir[:] = [0.0, 1.0, 0.0]
+    acq.slice_dir[:] = [0.0, 0.0, 1.0]
+
+
+def _xml_header(
+    config: Config,
+    signature: str,
+    segments: int,
+    *,
+    coils: int,
+    vendor: str,
+    frequency_hz: int | None,
+    field_strength_T: float | None,
+    model: str | None,
+    extra_strings: dict[str, str] | None = None,
+) -> str:
     x = ismrmrd.xsd
     fov_mm = config.geometry.fov_m * 1e3
     matrix = round(config.geometry.fov_m / config.geometry.resolution_m)
@@ -171,20 +277,15 @@ def _xml_header(config: Config, twix: TwixScan, signature: str, segments: int) -
         matrixSize=x.matrixSizeType(x=matrix, y=matrix, z=matrix),
         fieldOfView_mm=x.fieldOfViewMm(x=fov_mm, y=fov_mm, z=fov_mm),
     )
-    frequency = twix.header_value("Dicom", "lFrequency")
-    if not isinstance(frequency, int):
-        frequency = round(GAMMA_HZ_PER_T * config.system.B0_T)
-    field_strength = twix.header_value("Dicom", "flMagneticFieldStrength")
-    model = twix.header_value("Dicom", "ManufacturersModelName")
+    if frequency_hz is None:
+        frequency_hz = round(GAMMA_HZ_PER_T * config.system.B0_T)
     header = x.ismrmrdHeader(
-        experimentalConditions=x.experimentalConditionsType(H1resonanceFrequency_Hz=frequency),
+        experimentalConditions=x.experimentalConditionsType(H1resonanceFrequency_Hz=frequency_hz),
         acquisitionSystemInformation=x.acquisitionSystemInformationType(
-            systemVendor="Siemens",
-            systemModel=model if isinstance(model, str) else None,
-            systemFieldStrength_T=(
-                float(field_strength) if isinstance(field_strength, float | int) else None
-            ),
-            receiverChannels=twix.num_coils,
+            systemVendor=vendor,
+            systemModel=model,
+            systemFieldStrength_T=field_strength_T,
+            receiverChannels=coils,
         ),
         encoding=[
             x.encodingType(
@@ -209,6 +310,10 @@ def _xml_header(config: Config, twix: TwixScan, signature: str, segments: int) -
                 x.userParameterStringType(name=CONFIG_DIGEST, value=config.digest()),
                 x.userParameterStringType(name=SEQ_SIGNATURE, value=signature),
                 x.userParameterStringType(name=TRAJECTORY_UNITS, value=TRAJECTORY_UNITS_VALUE),
+                *(
+                    x.userParameterStringType(name=name, value=value)
+                    for name, value in (extra_strings or {}).items()
+                ),
             ],
         ),
     )
