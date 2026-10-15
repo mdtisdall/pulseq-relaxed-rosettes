@@ -6,9 +6,33 @@ on:
     branches: [main]
 
 jobs:
+  # One job, always named check, so that a required status check is the same for
+  # every change. When a change has only Markdown files, the nix checks are skipped.
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - run: nix develop --command scripts/check
+        with:
+          fetch-depth: 0
+      - name: Find docs-only changes
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A new branch has no "before" commit: run the full checks.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$BASE...$HEAD" | tee changed.txt
+          if [ -s changed.txt ] && ! grep -qv '\.md$' changed.txt; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+      - run: python3 scripts/check_links.py
+      - if: steps.changes.outputs.docs_only != 'true'
+        uses: cachix/install-nix-action@v31
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: nix develop --command scripts/check
