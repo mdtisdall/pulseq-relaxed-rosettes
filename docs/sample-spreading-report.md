@@ -350,6 +350,8 @@ The target curve also fixes the **scale pairing** of the reconstruction kernels,
 
 **So it runs both ways.** The application chooses its reconstruction kernels (shapes, and a priority over resolutions and windows) and its acceleration model; together they set $W^*(\text{res})$ and the weights $\alpha$; those define the design objective (8) and the score (3). Conversely, a target curve says which kernels the data support.
 
+[coverage-target.md](coverage-target.md) designs how an application states its coverage requirements, $W^*(\text{res})$ among them: which dimensions each resolves or averages, which inputs it picks, which are reconstruction settings with defaults, and how the requirements trace the front.
+
 ## 7. Appendix: full results
 
 *Generated from the coverage outputs and shapes files (`sample-spreading-report/scripts/report_tables.py`); see section 2 for the setup.*
