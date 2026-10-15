@@ -28,6 +28,13 @@ def build_design(directory: Path, config: Config) -> tuple[Path, Path]:
     return seq_path, traj_path
 
 
+def noise_mixing(rng: np.random.Generator, coils: int) -> NDArray[np.complex128]:
+    """A coil noise mixing matrix (noise covariance 2 M Mᴴ)."""
+    random = rng.standard_normal((coils, coils)) + 1j * rng.standard_normal((coils, coils))
+    mixing: NDArray[np.complex128] = np.eye(coils, dtype=np.complex128) + 0.4 * random
+    return mixing
+
+
 def _header(buffers: dict[str, str]) -> NDArray[np.bytes_]:
     """A twix measurement header with the given protocol buffers."""
     body = b"".join(

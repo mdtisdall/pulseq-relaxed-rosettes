@@ -328,6 +328,36 @@ def _cmd_grid(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sense(args: argparse.Namespace) -> int:
+    try:
+        from relaxed_rosettes.recon.rawdata import load_rawdata
+        from relaxed_rosettes.recon.sense import reconstruct, save_sense
+    except ImportError as e:
+        print(f"error: sense needs the recon extra ({e})", file=sys.stderr)
+        return 1
+    recon = _load_recon_config(args)
+    raw = load_rawdata(args.raw)
+    design, trajectory = load_trajectory(args.trajectory)
+    result = reconstruct(raw, design, trajectory, recon)
+    save_sense(args.output, result, coil_maps=args.coil_maps)
+    n = result.image.shape[0]
+    b0 = "no off-resonance term"
+    if result.field_map_hz is not None and result.segmentation is not None:
+        f = result.field_map_hz
+        b0 = (
+            f"field map {f.min():.0f} to {f.max():.0f} Hz, "
+            f"{len(result.segmentation.segment_tau_s)} segments "
+            f"(RMS error {result.segmentation.rms_error:.1e})"
+        )
+    print(
+        f"wrote {args.output}: {n}^3 at {recon.data.resolution_m * 1e3:g} mm from "
+        f"{result.num_trs} TRs, {result.num_samples} samples; {b0}; "
+        f"{len(result.residual) - 1} CG iterations, residual {result.residual[-1]:.1e} "
+        f"(recon config {recon.digest()})"
+    )
+    return 0
+
+
 def _parse_floats(text: str) -> list[float]:
     try:
         values = [float(v) for v in text.split(",")]
@@ -504,6 +534,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--coil-images", action="store_true", help="also store the image of each virtual coil"
     )
     grid.set_defaults(func=_cmd_grid)
+
+    sense = commands.add_parser(
+        "sense",
+        help="static CG-SENSE reconstruction with coil maps and off-resonance (recon extra)",
+    )
+    sense.add_argument("raw", type=Path, help="ISMRMRD file from `relaxed-rosettes to-ismrmrd`")
+    sense.add_argument(
+        "trajectory", type=Path, help="trajectory .npz from `relaxed-rosettes export-traj`"
+    )
+    _add_recon_config_args(sense, positional=False)
+    sense.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
+    sense.add_argument("--coil-maps", action="store_true", help="also store the coil maps")
+    sense.set_defaults(func=_cmd_sense)
 
     to_ismrmrd = commands.add_parser(
         "to-ismrmrd",
