@@ -1,0 +1,14 @@
+# Transcribed from the session console: samples near k_max (16 shapes pooled), and the direction of
+# the energy's descent at the edge samples of the start design F.
+F hairpin            samples within 2 cells of k_max: 0.44%   within 5 cells: 1.27%   max |k| median over shapes 1.0003
+G tips fixed + rep   samples within 2 cells of k_max: 0.47%   within 5 cells: 1.31%   max |k| median over shapes 1.0001
+I tips free + rep    samples within 2 cells of k_max: 0.01%   within 5 cells: 0.05%   max |k| median over shapes 0.9485
+edge samples (start F) where -grad F points inward: 53% (mean over shapes)
+J tips free, 60 steps: within 5 cells of k_max: 0.00%, max |k| median 0.9094, mean slewE 1338
+
+# Sample displacement by the repulsion (cells):
+hp_lam3 (G) sample displacement: median 5.0, 95th 18.4, max 28.9 cells (k_max = 128 cells)
+lam3tr (E)  sample displacement: median 9.7, 95th 21.2, max 31.7 cells (k_max = 128 cells)
+# Test 1 (H against E):
+distance between the two starts:  median 7.1, 95th 24.2 cells
+distance between the two results: median 6.1, 95th 22.2 cells

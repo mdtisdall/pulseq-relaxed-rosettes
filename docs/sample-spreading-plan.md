@@ -2,6 +2,8 @@
 
 Status: steps 1 and 2 are implemented (step 1: relaxed targets and the within-TR redundancy metric; step 2: repulsion within each shape, off by default, `repulsion_iterations` = 0); step 3 is a plan. Measurements that corrected the plan are marked **Measured**. It follows the petal timing of PR #16 and uses the density models of [sampling-density.md](sampling-density.md).
 
+The full record of the step 2 experiments and the follow-up tests (what each asked, why, the results and the conclusions) is in [sample-spreading-report.md](sample-spreading-report.md).
+
 The run times in this plan are estimates. As each step is implemented and run, record the measured times and results in section 6, in the same PR as the step, and correct the estimates in the text where they were wrong.
 
 ## Question

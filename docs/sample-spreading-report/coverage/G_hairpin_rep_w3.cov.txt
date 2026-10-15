@@ -1,0 +1,28 @@
+/Users/dylan/dev/pulseq-relaxed-rosettes/.venv/lib/python3.12/site-packages/pypulseq/Sequence/read_seq.py:237: UserWarning: 'where' used without 'out', expect uninitialized memory in output. If this is intentional, use out=None.
+  v = np.divide(v, norm, where=norm > 0)
+coverage: fraction of k-space cells sampled, median (minimum) over starts
+window s          8 mm          6 mm          4 mm          3 mm          2 mm        1.5 mm          1 mm
+     0.1     13% (13%)      8% ( 8%)      4% ( 4%)      2% ( 2%)      1% ( 1%)      1% ( 1%)      0% ( 0%)
+     0.2     23% (22%)     14% (14%)      7% ( 7%)      4% ( 4%)      2% ( 2%)      1% ( 1%)      0% ( 0%)
+     0.5     43% (43%)     29% (28%)     15% (15%)      9% ( 9%)      4% ( 4%)      2% ( 2%)      1% ( 1%)
+       1     64% (64%)     46% (46%)     26% (26%)     16% (16%)      8% ( 8%)      4% ( 4%)      2% ( 2%)
+       2     84% (84%)     67% (67%)     42% (42%)     28% (28%)     14% (14%)      8% ( 8%)      3% ( 3%)
+       5     98% (98%)     91% (91%)     70% (70%)     51% (51%)     29% (29%)     18% (18%)      7% ( 7%)
+      10    100% (100%)     99% (99%)     88% (88%)     73% (72%)     46% (46%)     30% (30%)     13% (13%)
+      30    100% (100%)    100% (100%)    100% (100%)     96% (96%)     79% (79%)     59% (59%)     28% (28%)
+
+gap: 95th percentile distance to a sample, in cells (1/FOV), median (maximum) over starts
+window s          8 mm          6 mm          4 mm          3 mm          2 mm        1.5 mm          1 mm
+     0.1     2.9 ( 3.1)     3.9 ( 4.1)     6.0 ( 6.1)     7.9 ( 8.1)    12.3 (12.6)    17.9 (18.0)    38.4 (38.9)
+     0.2     2.2 ( 2.2)     2.9 ( 3.0)     4.5 ( 4.6)     6.1 ( 6.1)     9.4 ( 9.7)    13.6 (14.3)    30.2 (30.9)
+     0.5     1.5 ( 1.5)     1.9 ( 2.0)     2.9 ( 3.0)     3.9 ( 4.0)     6.2 ( 6.3)     9.1 ( 9.5)    21.9 (22.7)
+       1     1.1 ( 1.1)     1.4 ( 1.4)     2.1 ( 2.1)     2.8 ( 2.9)     4.5 ( 4.6)     6.6 ( 6.7)    16.7 (17.1)
+       2     0.8 ( 0.8)     1.0 ( 1.0)     1.5 ( 1.5)     2.0 ( 2.1)     3.2 ( 3.3)     4.6 ( 4.7)    12.3 (12.6)
+       5     0.7 ( 0.7)     0.7 ( 0.8)     1.0 ( 1.0)     1.3 ( 1.3)     2.0 ( 2.1)     2.9 ( 3.0)     8.0 ( 8.1)
+      10     0.7 ( 0.7)     0.7 ( 0.7)     0.8 ( 0.8)     1.0 ( 1.0)     1.4 ( 1.5)     2.1 ( 2.1)     5.7 ( 5.8)
+      30     0.7 ( 0.7)     0.7 ( 0.7)     0.7 ( 0.7)     0.7 ( 0.7)     0.9 ( 0.9)     1.2 ( 1.2)     3.2 ( 3.3)
+
+(|k|, tau) sampling over the scan: 20 |k| shells x 90 tau bins of 0.5 ms
+  empty cells: 3.9% overall, 15.0% before 5 ms, 6.6% in the outer half of k-space
+  longest tau gap in a shell: median 0.5 ms, worst 2.5 ms (shell 19 of 20, 0 = center)
+within-TR redundancy: 3.9% of a shape's samples (median; 3.7% to 4.8%) are within 1 cell of an earlier pass of the same shape

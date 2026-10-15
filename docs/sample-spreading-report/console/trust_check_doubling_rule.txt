@@ -1,0 +1,22 @@
+# Transcribed from the session console. scripts/trust_check.py 3 on shape 0 of design A,
+# with the first trust-region rule (double on every accepted step, halve on rejection).
+ 0 trust  2.00  ratio   0.807  accept  F 0.3392142  slewE 1609  1.3s
+ 1 trust  4.00  ratio   0.622  accept  F 0.3387021  slewE 1815  1.6s
+ 2 trust  8.00  ratio   0.367  accept  F 0.3384559  slewE 1905  1.8s
+ 3 trust  8.00  ratio  -0.719  REJECT  F 0.3384559  slewE 1905  1.8s
+ 4 trust  4.00  ratio   0.059  REJECT  F 0.3384559  slewE 1905  1.6s
+ 5 trust  2.00  ratio   0.466  accept  F 0.3383829  slewE 1832  1.4s
+ 6 trust  4.00  ratio  -0.467  REJECT  F 0.3383829  slewE 1832  1.6s
+ 7 trust  2.00  ratio   0.138  accept  F 0.3383804  slewE 1781  1.5s
+ 8 trust  4.00  ratio  -0.635  REJECT  F 0.3383804  slewE 1781  1.6s
+ 9 trust  2.00  ratio   0.076  REJECT  F 0.3383804  slewE 1781  1.5s
+10 trust  1.00  ratio     nan  REJECT  F 0.3383804  slewE 1781  1.4s
+11 trust  0.50  ratio   0.786  accept  F 0.3383459  slewE 1767  1.3s
+12 trust  1.00  ratio   0.318  accept  F 0.3383334  slewE 1756  1.5s
+13 trust  2.00  ratio  -0.565  REJECT  F 0.3383334  slewE 1756  1.5s
+14 trust  1.00  ratio   0.176  accept  F 0.3383271  slewE 1752  1.5s
+15 trust  2.00  ratio  -0.557  REJECT  F 0.3383271  slewE 1752  1.4s
+16 trust  1.00  ratio   0.182  accept  F 0.3383204  slewE 1745  1.5s
+17 trust  2.00  ratio  -0.648  REJECT  F 0.3383204  slewE 1745  1.5s
+18 trust  1.00  ratio   0.117  accept  F 0.3383148  slewE 1746  1.5s
+19 trust  2.00  ratio  -0.687  REJECT  F 0.3383148  slewE 1746  1.5s
