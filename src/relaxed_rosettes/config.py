@@ -96,7 +96,7 @@ class GradientConfig:
 class ShapeConfig:
     """Rosette shape design. k-space radii are in units of k_max.
 
-    Each TR visits ``echoes_per_tr`` petal tips, crossing k = 0 between
+    Each TR visits a number of petal tips, crossing k = 0 between
     consecutive tips (one gradient echo each), then ends at the spoil moment.
     Tip radii are ``u ** tip_radius_power``, with ``u`` blue noise between
     ``tip_radius_min ** (1 / power)`` and ``tip_radius_max ** (1 / power)``:
@@ -118,13 +118,24 @@ class ShapeConfig:
 
     Rotations do not change |k|(t), so the (|k|, time since excitation) plane
     is sampled only by the shapes; ``num_shapes`` = 128 halves its empty
-    cells compared with 32 (256 adds little). Each segment between targets
-    gets time proportional to the sqrt of its target radius, scaled by a
-    random factor in ``[1 - timing_jitter, 1 + timing_jitter]``.
+    cells compared with 32 (256 adds little).
+
+    Each petal (k = 0, tip, k = 0) gets time in proportion to the shortest
+    time of a straight out-and-back path to its tip at the gradient and slew
+    limits (``relaxed_rosettes.targets.petal_times_s``; time proportional to
+    the sqrt of the tip radius is relatively close at the default limits). With
+    ``echoes_per_tr`` = 0 (the default), each shape visits as many tips as fit
+    in the ADC window when each petal gets ``segment_time_margin`` times its
+    shortest time, so the number of tips differs between shapes. The shortest
+    times are calibrated against the shape optimizer on
+    ``timing_calibration_shapes`` shapes. A larger margin gives fewer tips per
+    TR, with lower gradient and slew (quieter, less stimulation). With
+    ``echoes_per_tr`` > 0, every shape visits that many tips, and the petal
+    times are scaled to fill the ADC window.
     """
 
     num_shapes: int = 128
-    echoes_per_tr: int = 19
+    echoes_per_tr: int = 0
     tip_radius_min: float = 0.04
     tip_radius_max: float = 1.0
     tip_radius_power: float = 0.5
@@ -137,7 +148,8 @@ class ShapeConfig:
     calibration_shapes: int = 16
     max_consecutive_tip_dot: float = -0.5
     spoil_moment_kmax: float = 5.0
-    timing_jitter: float = 0.2
+    segment_time_margin: float = 1.1
+    timing_calibration_shapes: int = 8
 
 
 @dataclass(frozen=True)
@@ -385,10 +397,10 @@ def _validate(c: Config) -> list[str]:
     positive("gradients.max_slew_T_per_m_per_s", g.max_slew_T_per_m_per_s)
     positive("gradients.boundary_slew_T_per_m_per_s", g.boundary_slew_T_per_m_per_s)
     positive("shapes.num_shapes", sh.num_shapes)
-    positive("shapes.echoes_per_tr", sh.echoes_per_tr)
     positive("shapes.spoil_moment_kmax", sh.spoil_moment_kmax)
     positive("shapes.tip_radius_power", sh.tip_radius_power)
     positive("shapes.calibration_shapes", sh.calibration_shapes)
+    positive("shapes.timing_calibration_shapes", sh.timing_calibration_shapes)
     positive("shapes.density_resolution_min_m", sh.density_resolution_min_m)
     positive("scan.num_trs", c.scan.num_trs)
     if errors:
@@ -415,8 +427,10 @@ def _validate(c: Config) -> list[str]:
         errors.append("shapes.density_resolution_min_m is finer than geometry.resolution_m")
     if sh.calibration_iterations < 0:
         errors.append("shapes.calibration_iterations must be >= 0")
-    if not 0 <= sh.timing_jitter < 1:
-        errors.append("shapes.timing_jitter must be in [0, 1)")
+    if sh.echoes_per_tr < 0:
+        errors.append("shapes.echoes_per_tr must be >= 0 (0: as many as fit)")
+    if not sh.segment_time_margin >= 1:
+        errors.append("shapes.segment_time_margin must be >= 1")
     if c.scan.num_dummy_trs < 0:
         errors.append("scan.num_dummy_trs must be >= 0")
 
