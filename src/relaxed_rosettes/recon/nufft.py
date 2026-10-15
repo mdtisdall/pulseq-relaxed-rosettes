@@ -31,7 +31,8 @@ ENCODING_SIGN = 1
 """Sign of the encoding phase: the signal is sum image(r) exp(ENCODING_SIGN 2πi k·r)."""
 
 ComplexArray = NDArray[np.complex64]
-FloatArray = NDArray[np.float64]
+KArray = NDArray[np.floating[Any]]
+"""k-space points (points, 3), in 1/m; float32 or float64."""
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class Nufft:
     def shape(self) -> tuple[int, int, int]:
         return (self.n, self.n, self.n)
 
-    def coordinates(self, k_per_m: FloatArray) -> NDArray[np.float32]:
+    def coordinates(self, k_per_m: KArray) -> NDArray[np.float32]:
         """(3, points) FINUFFT coordinates (radians) of k-space points (points, 3).
 
         They are in ``[-π, π]`` for ``|k| <= 1 / (2 * resolution_m)``.
@@ -58,7 +59,7 @@ class Nufft:
         )
         return x
 
-    def forward(self, image: ComplexArray, k_per_m: FloatArray) -> ComplexArray:
+    def forward(self, image: ComplexArray, k_per_m: KArray) -> ComplexArray:
         """(channels, points) signal of (channels, n, n, n) images at k (points, 3)."""
         x = self.coordinates(k_per_m)
         image = np.ascontiguousarray(image, dtype=np.complex64)
@@ -67,7 +68,7 @@ class Nufft:
         )
         return y.reshape(image.shape[0], -1)
 
-    def adjoint(self, values: ComplexArray, k_per_m: FloatArray) -> ComplexArray:
+    def adjoint(self, values: ComplexArray, k_per_m: KArray) -> ComplexArray:
         """(channels, n, n, n) adjoint of (channels, points) values at k (points, 3)."""
         x = self.coordinates(k_per_m)
         values = np.ascontiguousarray(values, dtype=np.complex64)

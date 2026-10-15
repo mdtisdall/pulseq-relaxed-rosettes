@@ -114,6 +114,22 @@ It checks that the raw data and the trajectory come from the same design, then:
 
 The `.npz` file has `rss` (n³, root sum of squares), `coil_images` (with `--coil-images`), `coil_matrix` (prewhitening then compression), `noise_covariance`, `singular_values`, `dcf_change`, and the recon and design config digests. Image axis `i` is physical gradient axis `i` (pypulseq x, y, z), and index `j` is at `(j - n // 2) * resolution_m` from the isocenter. With the 45 ms readout, off-resonance blurs this image; a narrower τ window reduces the blur.
 
+### Static CG-SENSE reconstruction
+
+```
+uv run relaxed-rosettes sense raw.h5 traj.npz -c recon.toml -o sense.npz
+```
+
+One image from the whole scan, with coil maps and off-resonance, all estimated from the scan itself:
+
+- The prewhitened, compressed, selected data are read once and kept in memory (about `8 * coils.virtual_coils + 20` bytes per selected sample: ~3.8 GB at 2 mm, ~6.5 GB at 1 mm with 12 virtual coils).
+- Coil maps: the samples inside the k-space ball of `coil_maps.resolution_m` (default 8 mm), gridded on the reconstruction grid, then Inati's iterative method (box filter `coil_maps.smoothing_m`). The maps have unit norm over the coils.
+- Field map (`b0.segments > 0`): low-resolution (`b0.resolution_m`) coil-combined images of `b0.windows` windows of time since excitation, each at the mean τ of its samples (empty windows are skipped); the frequency is a least-squares fit of the phase steps between consecutive windows, smoothed over `b0.smoothing_m` (weighted by magnitude), then clipped to the magnitude-weighted 0.5–99.5% range so the background's noise does not count. Each step must be below half a cycle.
+- Off-resonance in the forward model: `exp(2πi f τ)` by `b0.segments` time segments, with least-squares coefficients over the field map's histogram (one NUFFT per segment).
+- CG on `(Eᴴ W E + λ I) x = Eᴴ W y` (`cg.iterations`, `cg.tolerance`, `cg.tikhonov`), with `W` the density compensation (`cg.weighting = "dcf"`, which scales `Eᴴ W E` to about 1) or the identity (`"none"`).
+
+The `.npz` file has `image` (complex), `magnitude`, `field_map_hz`, `segment_tau_s`, `segmentation_rms_error`, `coil_maps` (with `--coil-maps`), `cg_residual`, `coil_matrix`, and the recon and design config digests. The signal model is `sum_r x(r) exp(2πi (k·r + f(r) τ))`, the sign of the encoding phase, with τ from the RF center; the field map absorbs anything that adds phase linearly in τ. The image axes are those of `grid`.
+
 The recon uses NumPy and FINUFFT on the CPU. FINUFFT cannot share a process with PyTorch on macOS (both wheels bundle an OpenMP runtime), so the recon does not use PyTorch.
 
 ## Tip-radius density

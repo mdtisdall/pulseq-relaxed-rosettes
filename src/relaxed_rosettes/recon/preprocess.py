@@ -180,3 +180,57 @@ def coil_transform(
         compression=compression,
         singular_values=np.sqrt(np.clip(eigenvalues[order], 0.0, None)),
     )
+
+
+@dataclass(frozen=True)
+class CachedBatch:
+    """The selected samples of a batch of TRs, prewhitened and compressed."""
+
+    k_per_m: NDArray[np.float32]
+    """(points, 3) physical k."""
+    tau_s: NDArray[np.float32]
+    """(points,) time since excitation."""
+    sample: NDArray[np.int32]
+    """(points,) index of each point's ADC sample in ``Selection.samples``."""
+    values: ComplexArray
+    """(virtual coils, points) data."""
+
+    def subset(
+        self, k_max_per_m: float, tau_min_s: float = 0.0, tau_max_s: float = np.inf
+    ) -> CachedBatch:
+        """The points with ``|k| <= k_max_per_m`` and ``tau`` in ``[tau_min_s, tau_max_s)``."""
+        k = self.k_per_m
+        keep = np.einsum("pi,pi->p", k, k) <= k_max_per_m**2
+        keep &= (self.tau_s >= tau_min_s) & (self.tau_s < tau_max_s)
+        return CachedBatch(
+            k_per_m=k[keep],
+            tau_s=self.tau_s[keep],
+            sample=self.sample[keep],
+            values=self.values[:, keep],
+        )
+
+
+def cache_data(
+    selection: Selection, raw: RawData, trajectory: Trajectory, coils: CoilTransform
+) -> list[CachedBatch]:
+    """Read, prewhiten, compress, and select all the data once, a batch of TRs at a time.
+
+    Memory: about ``(8 * virtual coils + 20)`` bytes per selected sample.
+    """
+    matrix = coils.matrix
+    tau = trajectory.time_since_excitation_s[selection.samples]
+    cached = []
+    for trs in selection.tr_batches():
+        k, inside = selection.k(trajectory, trs)
+        data = raw.read(trs)[:, :, selection.samples]
+        values = np.einsum("vc,tcs->vts", matrix, data)[:, inside]
+        sample = np.nonzero(inside)[1]
+        cached.append(
+            CachedBatch(
+                k_per_m=k.astype(np.float32),
+                tau_s=tau[sample].astype(np.float32),
+                sample=sample.astype(np.int32),
+                values=values.astype(np.complex64),
+            )
+        )
+    return cached

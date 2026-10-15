@@ -29,7 +29,7 @@ from numpy.typing import NDArray
 
 from relaxed_rosettes.config import Config
 from relaxed_rosettes.recon.config import ReconConfig
-from relaxed_rosettes.recon.nufft import Nufft
+from relaxed_rosettes.recon.nufft import KArray, Nufft
 from relaxed_rosettes.recon.preprocess import CoilTransform, Selection, coil_transform
 from relaxed_rosettes.recon.rawdata import RawData
 from relaxed_rosettes.trajectory import Trajectory
@@ -47,9 +47,7 @@ class Dcf:
     """(iterations,): relative change of the weights in each iteration."""
 
 
-def pipe_menon_dcf(
-    nufft: Nufft, k_batches: Callable[[], Iterator[FloatArray]], iterations: int
-) -> Dcf:
+def pipe_menon_dcf(nufft: Nufft, k_batches: Callable[[], Iterator[KArray]], iterations: int) -> Dcf:
     """Pipe-Menon weights for the points of ``k_batches()`` (a fresh iterator of (points, 3) k).
 
     Each iteration is ``w <- w / (K * w)``. Without iterations, the weights
@@ -90,7 +88,7 @@ def pipe_menon_dcf(
 
 def grid(
     nufft: Nufft,
-    batches: Iterable[tuple[FloatArray, ComplexArray]],
+    batches: Iterable[tuple[KArray, ComplexArray]],
     dcf: Dcf,
     channels: int,
 ) -> ComplexArray:
