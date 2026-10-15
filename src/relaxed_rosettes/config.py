@@ -200,41 +200,20 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         """Plain dict of all values (enums as strings), in TOML layout."""
-        plain: dict[str, Any] = _plain(dataclasses.asdict(self))
-        return plain
+        return plain_dict(self)
 
     def digest(self) -> str:
         """Short SHA-256 of the canonical config, for tagging outputs."""
-        canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode()).hexdigest()[:12]
+        return digest_of(self.to_dict())
 
     def to_toml(self) -> str:
         """TOML text that ``from_toml`` reads back into an equal config."""
-        data = self.to_dict()
-        lines = [f"seed = {_toml_value(data.pop('seed'))}"]
-        for section, values in data.items():
-            lines += ["", f"[{section}]"]
-            lines += [f"{key} = {_toml_value(value)}" for key, value in values.items()]
-        return "\n".join(lines) + "\n"
+        return toml_text(self.to_dict())
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Config:
         """Build a config from TOML-layout data. Missing values take defaults."""
-        data = dict(data)
-        kwargs: dict[str, Any] = {}
-        for f in dataclasses.fields(cls):
-            if f.name not in data:
-                continue
-            value = data.pop(f.name)
-            if f.name == "seed":
-                kwargs["seed"] = _check_type("seed", value, int)
-                continue
-            if not isinstance(value, dict):
-                raise ConfigError(f"[{f.name}] must be a table")
-            kwargs[f.name] = _section_from_dict(f.name, _SECTIONS[f.name], value)
-        if data:
-            raise ConfigError(f"unknown key(s): {', '.join(sorted(data))}")
-        return cls(**kwargs)
+        return cls(**sections_from_dict(cls, data))
 
     @classmethod
     def from_toml(cls, text: str) -> Config:
@@ -254,36 +233,86 @@ class Config:
 
         Each value is parsed as a TOML value, falling back to a bare string.
         """
-        data = self.to_dict()
-        for item in overrides:
-            path, sep, raw = item.partition("=")
-            if not sep:
-                raise ConfigError(f"override {item!r} is not key=value")
-            keys = path.strip().split(".")
-            try:
-                value = tomllib.loads(f"v = {raw.strip()}")["v"]
-            except tomllib.TOMLDecodeError:
-                value = raw.strip()
-            if keys == ["seed"]:
-                data["seed"] = value
-            elif len(keys) == 2 and keys[0] in _SECTIONS:
-                if keys[1] not in data[keys[0]]:
-                    raise ConfigError(f"unknown key: {path}")
-                data[keys[0]][keys[1]] = value
-            else:
-                raise ConfigError(f"unknown key: {path}")
-        return Config.from_dict(data)
+        return Config.from_dict(apply_overrides(self.to_dict(), overrides))
 
 
 class ConfigError(ValueError):
     """A config file or override is invalid."""
 
 
-_SECTIONS: dict[str, type] = {
-    f.name: f.default_factory  # type: ignore[misc]
-    for f in dataclasses.fields(Config)
-    if f.name != "seed"
-}
+# Helpers shared by the configs (``Config`` here, ``ReconConfig`` in the
+# recon package): a config is a frozen dataclass whose fields are integer
+# scalars (e.g. the seed) or sections, themselves frozen dataclasses of
+# floats, ints, and string enums, all with defaults.
+
+
+def sections_from_dict(cls: type, data: dict[str, Any]) -> dict[str, Any]:
+    """Keyword arguments for config class ``cls`` from TOML-layout data.
+
+    Missing values take defaults; unknown keys and wrong types fail.
+    """
+    data = dict(data)
+    kwargs: dict[str, Any] = {}
+    for f in dataclasses.fields(cls):
+        if f.name not in data:
+            continue
+        value = data.pop(f.name)
+        if f.default_factory is dataclasses.MISSING:
+            kwargs[f.name] = _check_type(f.name, value, int)
+            continue
+        if not isinstance(value, dict):
+            raise ConfigError(f"[{f.name}] must be a table")
+        kwargs[f.name] = _section_from_dict(f.name, f.default_factory, value)  # type: ignore[arg-type]
+    if data:
+        raise ConfigError(f"unknown key(s): {', '.join(sorted(data))}")
+    return kwargs
+
+
+def digest_of(data: dict[str, Any]) -> str:
+    """Short SHA-256 of canonical JSON of TOML-layout data."""
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
+
+
+def toml_text(data: dict[str, Any]) -> str:
+    """TOML text of TOML-layout data: the scalars first, then one table per section."""
+    lines = [
+        f"{key} = {_toml_value(value)}"
+        for key, value in data.items()
+        if not isinstance(value, dict)
+    ]
+    for section, values in data.items():
+        if isinstance(values, dict):
+            if lines:
+                lines.append("")
+            lines.append(f"[{section}]")
+            lines += [f"{key} = {_toml_value(value)}" for key, value in values.items()]
+    return "\n".join(lines) + "\n"
+
+
+def apply_overrides(data: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
+    """Apply ``section.key=value`` (or ``key=value`` for a scalar) overrides to TOML-layout data.
+
+    Each value is parsed as a TOML value, falling back to a bare string.
+    """
+    for item in overrides:
+        path, sep, raw = item.partition("=")
+        if not sep:
+            raise ConfigError(f"override {item!r} is not key=value")
+        keys = path.strip().split(".")
+        try:
+            value = tomllib.loads(f"v = {raw.strip()}")["v"]
+        except tomllib.TOMLDecodeError:
+            value = raw.strip()
+        if len(keys) == 1 and keys[0] in data and not isinstance(data[keys[0]], dict):
+            data[keys[0]] = value
+        elif len(keys) == 2 and isinstance(data.get(keys[0]), dict):
+            if keys[1] not in data[keys[0]]:
+                raise ConfigError(f"unknown key: {path}")
+            data[keys[0]][keys[1]] = value
+        else:
+            raise ConfigError(f"unknown key: {path}")
+    return data
 
 
 def _section_from_dict(name: str, cls: type, values: dict[str, Any]) -> Any:
@@ -312,6 +341,12 @@ def _check_type(label: str, value: Any, types: type | tuple[type, ...]) -> Any:
     if isinstance(value, bool) or not isinstance(value, types):
         raise ConfigError(f"{label} has the wrong type: {value!r}")
     return value
+
+
+def plain_dict(config: Any) -> dict[str, Any]:
+    """Plain dict of all values of a config dataclass (enums as strings)."""
+    plain: dict[str, Any] = _plain(dataclasses.asdict(config))
+    return plain
 
 
 def _plain(value: Any) -> Any:

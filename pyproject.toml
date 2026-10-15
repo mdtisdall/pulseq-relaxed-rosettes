@@ -16,6 +16,7 @@ relaxed-rosettes = "relaxed_rosettes.cli:main"
 
 [project.optional-dependencies]
 recon = [
+    "finufft>=2.5.1",
     "h5py>=3.16.0",
     "ismrmrd>=1.15.0",
     "twixtools>=0.24",
@@ -40,6 +41,8 @@ strict = true
 
 [[tool.mypy.overrides]]
 module = [
+    "finufft",
+    "finufft.*",
     "h5py",
     "h5py.*",
     "ismrmrd",

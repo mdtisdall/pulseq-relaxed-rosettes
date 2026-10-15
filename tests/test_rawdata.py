@@ -1,4 +1,3 @@
-import struct
 from pathlib import Path
 
 import h5py
@@ -6,14 +5,13 @@ import ismrmrd
 import ismrmrd.xsd
 import numpy as np
 import pytest
-import twixtools
 from numpy.typing import NDArray
-from twixtools.mdb import Mdb_local
+from twix_helpers import NOISE_DWELL_NS, build_design, write_meas
 
 from relaxed_rosettes.cli import main
 from relaxed_rosettes.config import Config
 from relaxed_rosettes.recon.rawdata import load_rawdata
-from relaxed_rosettes.recon.twix import TIMESTAMP_TICK_S, read_twix
+from relaxed_rosettes.recon.twix import read_twix
 from relaxed_rosettes.sequence import read_seq_signature
 from relaxed_rosettes.trajectory import Trajectory, load_trajectory
 
@@ -31,84 +29,23 @@ SMALL = Config().with_overrides(
 )
 COILS = 3
 SEGMENT = 1000
-NOISE_DWELL_NS = 5000
 
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     """A .seq file with its design file, and the exported trajectory."""
-    directory = tmp_path_factory.mktemp("built")
-    config_path = directory / "small.toml"
-    config_path.write_text(SMALL.to_toml())
-    shapes_path = directory / "shapes.npz"
-    seq_path = directory / "small.seq"
-    traj_path = directory / "traj.npz"
-    assert main(["shapes", str(config_path), "-o", str(shapes_path), "--jobs", "1"]) == 0
-    assert main(["sequence", str(shapes_path), "-o", str(seq_path)]) == 0
-    assert main(["export-traj", str(seq_path), "-o", str(traj_path)]) == 0
-    return seq_path, traj_path
-
-
-def _header(buffers: dict[str, str]) -> NDArray[np.bytes_]:
-    """A twix measurement header with the given protocol buffers."""
-    body = b"".join(
-        name.encode() + b"\x00" + struct.pack("<I", len(text) + 1) + text.encode() + b"\x00"
-        for name, text in buffers.items()
-    )
-    raw = struct.pack("<II", 8 + len(body), len(buffers)) + body
-    return np.frombuffer(raw, dtype="S1")
-
-
-def _ascconv(lines: list[str]) -> str:
-    return "### ASCCONV BEGIN ###\n" + "\n".join(lines) + "\n### ASCCONV END ###\n"
-
-
-def _mdb(data: NDArray[np.complex64], scan_counter: int, time_stamp: int) -> Mdb_local:
-    mdb = Mdb_local(data)
-    mdb.mdh.ScanCounter = scan_counter
-    mdb.mdh.TimeStamp = time_stamp
-    mdb.mdh.PMUTimeStamp = time_stamp + 7
-    mdb.mdh.MeasUID = 42
-    mdb.mdh.SliceData.Quaternion[:] = [1.0, 0.0, 0.0, 0.0]
-    mdb.mdh.SliceData.SlicePos.Tra = 12.5
-    return mdb
+    return build_design(tmp_path_factory.mktemp("built"), SMALL)
 
 
 def _write_meas(
     path: Path, signature: str, num_trs: int, rng: np.random.Generator, segment: int = SEGMENT
 ) -> tuple[NDArray[np.complex64], NDArray[np.complex64]]:
-    """A meas.dat file with a noise measurement and a scan; returns (data, noise)."""
+    """A meas.dat file of random data, with two noise readouts; returns (data, noise)."""
     noise = rng.standard_normal((2, COILS, 256)) + 1j * rng.standard_normal((2, COILS, 256))
     noise = noise.astype(np.complex64)
-    noise_mdbs = []
-    for i in range(2):
-        mdb = _mdb(noise[i], i + 1, 100)
-        mdb.add_flag("NOISEADJSCAN")
-        noise_mdbs.append(mdb)
-    noise_scan = {
-        "hdr_str": _header({"MeasYaps": _ascconv([f"sRXSPEC.alDwellTime[0] = {NOISE_DWELL_NS}"])}),
-        "mdb": noise_mdbs,
-    }
-
     shape = (num_trs, COILS, 2 * segment)
     data = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(np.complex64)
-    tr_ticks = round(SMALL.readout.tr_s / TIMESTAMP_TICK_S)
-    mdbs = [
-        _mdb(data[t, :, s * segment : (s + 1) * segment], 2 * t + s + 1, 1000 + t * tr_ticks)
-        for t in range(num_trs)
-        for s in range(2)
-    ]
-    scan = {
-        "hdr_str": _header(
-            {
-                "Dicom": '<ParamLong."lFrequency">  { 123200000  }\n'
-                '<ParamDouble."flMagneticFieldStrength">  { <Precision> 6  2.89 }\n',
-                "MeasYaps": _ascconv([f'sWipMemBlock.tFree = "{signature}"']),
-            }
-        ),
-        "mdb": mdbs,
-    }
-    twixtools.write_twix([noise_scan, scan], str(path))
+    write_meas(path, signature, data, noise, segments=2, tr_s=SMALL.readout.tr_s)
     return data, noise
 
 
