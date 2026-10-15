@@ -181,7 +181,7 @@ This suggests a **library of complete groups**: $S = G \times m$ shapes in $G$ g
 - the $(\lvert k \rvert, \tau)$ terms stop improving once the rank-$L$ conditions are met; beyond that, more shapes are insurance against a signal that rank $L$ does not describe well;
 - more shapes can share the coverage obligations, so each shape can be cheaper in slew energy. For the windowed requirements (BOLD, navigator), the sharing is limited to the shapes within one window, so this gain saturates near the group size $m$; for the whole-scan requirements it continues further, but weakly.
 
-The costs grow about linearly in $S$ (optimization, calibration, sequence size), and a jointly designed library of many shapes is a harder optimization, more likely to stop at a poor local optimum. In practice, more can then be worse. So there is a "good enough" $S$ for each design: where the measured gain on the scores of the requirements drops below their measurement noise, or stops being worth the added cost. Experiment 2 of section 7 measures that curve.
+The costs grow about linearly in $S$ (optimization, calibration, sequence size), and a jointly designed library of many shapes is a harder optimization, more likely to stop at a poor local optimum. In practice, more can then be worse. So there is a "good enough" $S$ for each design: where the measured gain on the scores of the requirements drops below their measurement noise, or stops being worth the added cost. Experiment 3 of section 7.2 measures that curve for random libraries.
 
 **Fitting with neighbours.** Part of the difficulty is that each shape must fit with the shapes it shares windows with. If every shape had to fit with *any* $m - 1$ others, the number of combinations would be $\binom{S}{m}$: polynomial in $S$, but exponential in the window size $m$. Three things keep the demand manageable:
 
@@ -193,17 +193,44 @@ The price of roles is a period of $m$ TRs in the $(\lvert k \rvert, \tau)$ sampl
 
 *Hypothesis:* for these requirements the good-enough $S$ is a few complete groups of $m \le 10$ shapes, so tens of shapes rather than 128, provided the library is designed as complementary groups. A random library needs more shapes for the same coverage, which is what the 32 against 128 measurement shows.
 
-## 7. Plan of experiments
+## 7. Plan of in silico experiments
 
-1. **Greedy schedule with the current shapes** (section 5). Keep the 128 shapes; candidates are a dense set of SO(3) rotations; choose against the requirement terms. Compare with today's shuffle on:
-   - the static term and measure 3 at 25%, 50% and 100% of the scan (early stopping);
-   - the k–T spectrum in the BOLD band (periodicity);
-   - the navigator's gaps at short windows.
+Each experiment tests a claim of sections 3–6. Record each result here, in the same PR as the experiment, and correct the sections it tests. Coils ($R(\text{res})$), PNS and acoustics are left out until the objective is validated (experiment 1).
 
-   Memory check on one configuration first.
-2. **The $(\lvert k \rvert, \tau)$ distribution of the current library**: measure how well it meets the relaxation 4D and no-correlation conditions in the $L$-dimensional form of section 6.1, as a function of the number of shapes (for example 8, 16, 32, 64, 128 random shapes) and of the number of consecutive TRs, before redesigning shapes.
-3. **A complementary library with roles** (sections 6, 6.1): $m$ roles complete together, cycled by the schedule, if step 2 shows a deficit, or shows that random libraries need many more shapes than one complete set. Check the k–T spectrum for aliasing from the period of the roles.
-4. **Alternating shapes and schedule**, if 1–3 leave a gap.
+### 7.1 Shared tools
+
+The reconstruction has no τ basis and no numerical phantom yet (`relaxed_rosettes.recon` has CG-SENSE, coil maps and B0). The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) is about T, not τ.
+
+- **τ basis**: the SVD of simulated signal curves over the ADC window, for ranges of T2\* and off-resonance. It gives $L$ and $\phi_l(\tau)$.
+- **Frame-potential evaluator** for each requirement: the NUFFT (PSF) form for the terms averaged over T, the accumulated-grid form for the terms local in T (section 5).
+- **k–T spectral score**: for each k-region at a requirement's resolution, the power spectrum of its sample occupancy over T, integrated over the BOLD band.
+- **Numerical phantom** $x(r, \tau, T)$: T2\* and B0 maps, a 1% BOLD time course in a few regions, and respiratory and cardiac components. Needed only for experiments 1, 6 and 7.
+
+### 7.2 Experiments
+
+1. **Does the frame potential predict reconstruction quality?** The gate for the rest: section 3 replaces the energy distance because it was misaligned, so the new objective needs the check the old one failed.
+   - Setup: designs A–M of the report and a few 128-shape designs. For each, the frame potential of each requirement, and the matching linear reconstruction (section 3.1) of phantom data with noise; error and noise against the ground truth.
+   - Decision: the rank correlation of frame potential with reconstruction error, against that of measure 3 and of the energy distance. If the frame potential does not predict the error better, revise the objective before optimizing it.
+2. **Do nested terms give a centre-heavy density?** Tests the hypothesis of section 3.2.
+   - Setup: a radial problem, with no waveforms: choose $D(\lvert k \rvert)$ to minimize $\sum \alpha\, \text{FP}$ over the four requirements' balls at a fixed number of samples. Compare with the `exponent` and `filter` densities and the measured curve (about $\text{res}^{-2.5}$).
+   - Cheap. It shows whether the requirements imply a radial density by themselves.
+3. **How many random shapes meet the $(\lvert k \rvert, \tau)$ conditions?** The "good enough" curve of section 6.1 for a random library; no optimization.
+   - Setup: random libraries of 8, 16, 32, 64 and 128 shapes; windows of 1, 3, 10 and all TRs. At each radius, the samples in each of the $L$ τ groups (relaxation 4D), and the spread across radii of the $L$ basis projections of the τ distribution (no correlation, for averaging).
+   - Decision: where the curves flatten. If one complete set needs far more than 10 shapes, BOLD cannot be complete within its window, and roles are needed, not optional.
+4. **Greedy schedule against the shuffle, with the current shapes.** Tests sections 4 and 5: coverage at no slew cost, and the early-stop property.
+   - Setup: the 128 shapes, a dense set of SO(3) rotations as candidates; pure greedy, greedy on a random subset of candidates at each step, and the shuffle. Memory check on one configuration first.
+   - Measures: the static term and measure 3 at 25%, 50% and 100% of the scan; the static frame potential against the number of TRs on a log–log plot (herding predicts a steeper slope than the shuffle); the k–T spectrum in the BOLD band (pure greedy may be quasi-periodic); the navigator's gaps at short windows; the time to score the candidates of one TR.
+5. **A library with roles.** Tests section 6.1: $m$ roles complete together make every window of $m$ TRs complete, at lower slew energy than shapes that are each complete.
+   - Setup: assign tip radii to τ slots across $m$ = 9 or 10 roles (3 × 3 nested), with the existing target and tip code, then the SCP shape solve.
+   - Measures: the conditions of experiment 3 for every window of $m$ TRs, against a random library of the same size; the slew energy of each shape (the claim that shared obligations make shapes cheaper).
+6. **Is "no correlation" the right condition for averaging?** Tests sections 2 and 3.1: averaging is a model choice, and the condition has an $L$-projection form.
+   - Setup: the static 1 mm image of the phantom, reconstructed with $L$ = 1 directly, and with the full $L$ and then averaged. Vary the $\lvert k \rvert$–τ correlation of the library on purpose (for example, tip radii ordered by τ).
+   - Decision: whether the artefact level follows the $L$-projection mismatch of experiment 3, and whether reconstructing with the full basis is worth its cost.
+7. **Aliasing from the period of the roles.** Tests the risk of section 6.1: a cardiac harmonic near 2 Hz aliasing into the BOLD band.
+   - Setup: the phantom with cardiac and respiratory components; roles cycled at 2 Hz, roles with the order jittered between cycles, the greedy schedule, and the shuffle. Score with the k–T spectrum in the band; if affordable, the continuous-T BOLD reconstruction and the false signal in the band.
+   - Decision: whether roles need jitter, and what jitter costs in completeness.
+
+**Order.** Experiment 1 first, because 2, 4 and 5 optimize the frame potential. Experiments 2 and 3 are cheap and independent and can run beside 1. Experiment 4 needs only the evaluator; 5–7 need the τ basis and the phantom. If 1–5 leave a gap, alternate shapes and schedule (section 6).
 
 ## 8. Decisions
 
@@ -215,4 +242,4 @@ The price of roles is a period of $m$ TRs in the $(\lvert k \rvert, \tau)$ sampl
 
 ## 9. Conclusion
 
-Not reached. The direction so far: design the schedule greedily against the frame potentials of the requirements' reconstructions, then design the shapes for the $(\lvert k \rvert, \tau)$ terms and slew energy as $m$ complementary roles that the schedule cycles through, so that every window of $m$ TRs is complete, probably with tens of shapes rather than 128. Section 7 decides whether that holds.
+Not reached. The direction so far: design the schedule greedily against the frame potentials of the requirements' reconstructions, then design the shapes for the $(\lvert k \rvert, \tau)$ terms and slew energy as $m$ complementary roles that the schedule cycles through, so that every window of $m$ TRs is complete, probably with tens of shapes rather than 128. The experiments of section 7 decide whether that holds.
