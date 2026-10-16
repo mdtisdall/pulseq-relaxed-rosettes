@@ -8,6 +8,25 @@ The design work is in three gated stages: (a) before the scan, choose the design
 
 A requirement can leave a dimension out of its output, or resolve it ([coverage-target.md](coverage-target.md), section 1). How the reconstruction handles each dimension sets what the trajectory must do. The existing documents handle dimensions in different ways: [example-requirements-design.md](example-requirements-design.md) averages, by a model of rank 1 or a fixed basis; [quadratic-norm-report.md](quadratic-norm-report.md) takes a 2-norm; [basis-quality-test-plan.md](basis-quality-test-plan.md) fits a low-rank model of the signal in T, and [b0-scan-time-plan.md](b0-scan-time-plan.md) a low-rank model of the field in T. Before the design objective is fixed, the series develops each way on an equal footing, and then compares and combines them.
 
+## The overall problem, and what the series covers
+
+The design problem has three parts, as in Bayesian experimental design: what we choose before the scan (the design), what we know before the scan (the priors, and the outputs we want), and what we do with the data (the reconstruction and the analysis). The best design minimizes the expected loss, over the priors and the noise, for a given way of using the data.
+
+| part | contents | in this series |
+|---|---|---|
+| **chosen before the scan** | the shapes, their number, the rotations, the schedule | in scope: the trajectory's representation (section 1.2), designed before the object is seen |
+| | the spoil moment of each shape | in scope, through the trajectory (section 1.2) |
+| | TR, flip angle, RF phase scheme, ADC window and dwell, scan length, choice of coil | held fixed at the defaults of `relaxed_rosettes.config.Config`. They change the signal (contrast, steady state, SNR, spurious echoes), not only the encoding; designing them is later work |
+| **known before the scan** | the outputs: the example requirements (section 1.3) | in scope: they set the outputs of the cells |
+| | priors on the object and its changes: the object's spectrum, the range of R2\*, the BOLD band and the physiological bands, the task stimulus, the population span of B0 over T | in scope: chapter 0 lists them in one place (section 4) |
+| **done with the data** | the reconstruction: the cells, and the estimates of the nuisance operator components | in scope: families of estimators (section 2) |
+| | design during the scan from the data acquired so far; motion | out of scope (section 7, decisions) |
+| | the analysis of the outputs (for example BOLD statistics), and stage (c) | out of scope |
+
+So the series is the **design of the encoding, given stated priors and outputs, for given families of reconstruction**. It does not look for the best possible estimator: the pressures and conditions are for the estimators of each cell. A representation sits across two parts: it is a choice of how to use the data, and it builds in a prior (a rank, smoothness in T, a band limit).
+
+Chapter 0 restates this framing in full, with the toy and the real 5D problem as two instances of it, and the other chapters refer back to it: each states which design variables, priors and outputs it uses, so that what was scattered or implicit in the earlier documents becomes explicit.
+
 ## 1. Two questions about each dimension
 
 Every way of handling a dimension answers two separate questions:
@@ -100,9 +119,9 @@ One document for each chapter, numbered in reading order. File names carry the n
 
 | chapter | name | content |
 |---|---|---|
-| 0 | Foundations | the grid of section 1 (representation × output; signal dimensions and operator components), the notation, the shared toy, the template of the cell chapters |
-| 1 | Representations | primer for the representation axis: the conditioning of a basis-weighted operator, fixed against fitted bases, rank against density, coupling with space; the nuisance operator components (section 1.1): coils fitted or collapsed, B0 over T as modes; and the trajectory's representation (section 1.2): the shapes as a basis over $(|k|, \tau)$ and their number as its rank, the rotations, the schedule, the factorization between shapes and schedule, the roles |
-| 2 | Outputs | primer for the output axis: linear against quadratic functionals, why errors that cancel in a linear output add up in a quadratic one, and how products between independent sets remove that bias |
+| 0 | The design problem | the problem before any method, in the framework of optimal experimental design (section "The overall problem"): the problem notation ($x(r, \tau, T)$, $y_p = A_p x_p + n_p$, k, τ, T, TR); the forward model and its components; the design variables, including the trajectory's parameterization (shapes, rotations, schedule), against the nuisance parameters (coils, B0 over T); the priors, listed in one place; the outputs and their loss; the estimator, as a slot that the later chapters fill; the expected loss; and the definitions of pressure and condition (section 4). Then two instances of the framework, element by element: the 1D toy, simulated, and the real 5D problem, described but not simulated, with where each of its elements has been measured so far (for example the static image in experiment 1a) |
+| 1 | Representations | opens with the grid of section 1: both axes briefly, and signal dimensions against operator components. Then the primer for the representation axis: the conditioning of a basis-weighted operator, fixed against fitted bases, rank against density, coupling with space; the nuisance operator components (section 1.1): coils fitted or collapsed, B0 over T as modes; and the trajectory's representation (section 1.2): the shapes as a basis over $(|k|, \tau)$ and their number as its rank, the rotations, the schedule, the factorization between shapes and schedule, the roles |
+| 2 | Outputs | primer for the output axis, with the grid as chapter 1 states it: linear against quadratic functionals, why errors that cancel in a linear output add up in a quadratic one, and how products between independent sets remove that bias |
 | 3 | Rank 1 average | rank 1, fixed × coefficient (truncate and average). Used by: the static image and the fast coarse image over τ; the static image and relaxation 4D over T. Now: [example-requirements-design.md](example-requirements-design.md), section 3.1; measured in 3D in experiment 1a |
 | 4 | Fixed basis, resolved | rank L, fixed × coefficients. Used by: relaxation 4D and BOLD over τ. Now: [example-requirements-design.md](example-requirements-design.md), section 3.1 |
 | 5 | Fixed basis, then average | rank L, fixed × linear (resolve, then average). Used by: an alternative for the static image. Now: one sentence in [example-requirements-design.md](example-requirements-design.md), section 3.1; experiment 6, not run |
@@ -126,20 +145,36 @@ One document for each chapter, numbered in reading order. File names carry the n
 
 ## 4. Rules for the cell chapters (3–9)
 
-**Template.** Each cell chapter has these sections, in this order: the dimensions it applies to; the assumptions about the signal; the estimator; its bias; its variance; its cost; its failure modes; the toy; the design pressures.
+**Template.** Each cell chapter has these sections, in this order: the dimensions it applies to; the assumptions about the signal; the estimator; its bias; its variance; its cost; its failure modes; the toy; the design pressures and conditions.
 
 **Short, and no repetition of the primers.** A cell chapter contains only what comes from the combination of its representation and its output. If it starts to derive something that holds for every cell with the same representation, or the same output, that material belongs in chapter 1 or 2.
+
+**Placed in the framing.** Each cell chapter opens by naming, in the terms of chapter 0, the outputs it serves, the priors it assumes, and the design variables its pressures and conditions act on.
 
 **General theory first.** The theory is stated for $x(r, \tau, T)$ in 5D, with samples off the grid, rotations, and the library of shapes. The toy is a special case of it.
 
 **The toy explains; it does not predict.**
 
-- All chapters use the same 1D toy signal model, which chapter 0 defines.
+- All chapters use the same 1D toy, which chapter 0 defines before any method, so that it favours none. Chapter 0 states its outputs and their loss; the cell chapters attach their estimators to it.
+- Chapter 0 describes the real 5D problem in the same structure, without simulating it. Each cell chapter states its pressures and conditions in the terms of that description.
+- The toy has the structure of the framing (section "The overall problem"), with each element stated explicitly:
+  - **design variables:** the 1D analogues of the shapes (petals and their tips), their number, the rotation (the sign of k), the schedule, and the scan length; which of them a chapter varies, and which are held fixed;
+  - **priors:** a stated distribution over objects and their changes (density, R2\*, phase drift, BOLD and non-BOLD changes, the task response and its lag, respiration) and over the noise, from which the toy's objects are drawn. A single phantom is one draw from it;
+  - **outputs and loss:** for each cell, the quantity it reports and the measure of its error (for example a bias, a variance, or a relative RMS error);
+  - **estimator:** the reconstruction of the cell;
+  - **expected loss:** the loss averaged over draws from the priors and the noise, which is the toy's analogue of what a pressure acts on. Like every toy result, it explains and does not predict.
 - The toy shows mechanisms, for example model error, leakage and its removal by products, a phase drift, shared time courses, a lost lag, and the correlation with a task stimulus. A toy result is not a prediction of the effect on a rosette.
 - Some mechanisms have no 1D form. A rotation in 1D is only a sign flip, so angular fill, roles across directions, and the placement of spoiled magnetization cannot be shown. Where the toy cannot show a mechanism, the chapter says so.
 - 1D can make an effect larger or smaller than it is in 3D. In 1D the DFT makes every k its own problem; in 3D the point-spread functions of off-grid samples overlap, and the aliasing is less white.
 
-**Design pressures, in 5D.** Each cell chapter ends with the pressures that its cell puts on the trajectory:
+**Pressures and conditions.** Chapter 0 defines them as concepts of the framework: a pressure is the change of the expected loss along a direction of the design, for a given estimator; a condition says where an estimator stays valid. The series uses the two words for what a cell asks of the design:
+
+- A **pressure** is a claim, derived from a cell's theory, that the cell's error changes when the design moves along a named direction of the trajectory's representation (section 1.2): with a sign, a rough strength, the constraint that limits that direction, and a status. Pressures are soft: they can be traded against each other. They stay informal in this series; putting them in one formalism, as a design objective, is later work. The word is meant in the sense of selection pressure: a tendency, not a force or a gradient.
+- A **condition** is hard: a design that fails it makes the cell's estimator invalid, not only worse. For example, each set of TRs must hold the whole library of shapes, and a periodic schedule must have no harmonic in the band ([quadratic-norm-report.md](quadratic-norm-report.md), sections 3.1 and 3.3).
+
+Conditions filter designs; pressures rank the designs that remain.
+
+**Design pressures and conditions, in 5D.** Each cell chapter ends with the pressures and conditions that its cell puts on the trajectory:
 
 - They are for the 5D case and are derived from the chapter's general theory. The toy can be referred to as an illustration, not as evidence.
 - Each pressure comes from a stated expression in the theory (a bias term, a variance term, a conditioning measure). The pressure section says which part of that expression the shapes control and which part the schedule controls. A rotation preserves $|k|$, τ, and the slew energy of every sample ([example-requirements-design.md](example-requirements-design.md), section 4).
@@ -149,7 +184,8 @@ One document for each chapter, numbered in reading order. File names carry the n
   - the schedule: angular fill, the k–T spectrum, independence across TRs, early stopping, compatibility with a split of the TRs into sets, the directions of the spoil moments.
 - Each pressure names the direction it acts on and the constraint that limits that direction: slew energy, PNS, or spoiling.
 - Each pressure is stated in a form that can be checked: the quantity, the direction in which it pushes the design, and how strongly, according to the theory.
-- Each pressure has a status: derived; derived under a named assumption; or a hypothesis.
+- Each pressure and each condition has a status: derived; derived under a named assumption; or a hypothesis.
+- Each pressure and each condition names the priors it depends on, from the list in chapter 0: for example, the τ-averaging mismatch depends on the object's spectrum, and the leakage in a band on the BOLD band.
 - The pressures are stated with the coils fitted (SENSE). Each chapter says how they scale with $R(\text{res})$, and does not repeat its theory for collapsed coils.
 - The cell chapters do not plan checks. Chapter 11 does.
 
@@ -165,24 +201,25 @@ The axes help to attribute the pressures. Pressures on conditioning come mainly 
 
 ## 5. The synthesis and the checks (chapters 10 and 11)
 
-**Chapter 10, synthesis.**
+**Chapter 10, synthesis.** It stops at the conditions and the table of pressures. It does not choose a design objective: that needs more research, and is later work, as is warping the shapes along the gradient of such an objective.
 
-- Combine the pressures of the cell chapters into one table of cells × pressures, and find where they conflict. Two conflicts are already known: greedy (herded) schedules against the independence across TRs that the quadratic forms (chapter 8) need, and cycled roles against splits into interleaved halves.
+- Combine the conditions of the cell chapters into the filter that a design must pass, and their pressures into one table of cells × pressures, and find where they conflict. Two conflicts are already known: greedy (herded) schedules against the independence across TRs that the quadratic forms (chapter 8) need, and cycled roles against splits into interleaved halves.
 - Treat the combinations of cells across dimensions, including those that do not factor (chapters 7 and 9, which couple T with space), and sequences (subtract a model, then take a quadratic form of the residual).
 - Treat collapsed coils as a final quadratic step on top of any cell (section 1.1, item 4).
 - Restate the example requirements (fast coarse image, relaxation 4D, static, BOLD) as a cell for each dimension, with any new kind of requirement ([coverage-target.md](coverage-target.md), section 9).
 
 **Chapter 11, checks.**
 
-- For each pressure that chapter 10 keeps, a check of its size on the real trajectory, at the cheapest tier that can answer it ([example-requirements-design.md](example-requirements-design.md), section 7.3; normally Tier 1).
+- For each condition that chapter 10 keeps, a check that the candidate designs meet it; for each pressure, a check of its size on the real trajectory, at the cheapest tier that can answer it ([example-requirements-design.md](example-requirements-design.md), section 7.3; normally Tier 1).
 - A measurement of $R(\text{res})$, by which the coils scale every pressure: the coil-aware kernel that [example-requirements-design.md](example-requirements-design.md) (section 3.2, caveats) defers.
 - Checks of the trajectory's representation itself: how many shapes are enough, and whether roles help ([example-requirements-design.md](example-requirements-design.md), experiments 3 and 5).
+- The sensitivity of the ranking of designs to the priors: whether it changes when a prior changes within its plausible range.
 - The gates of stage (a): which results select or reject a design.
 - Results that contradict a chapter go back into that chapter.
 
 ## 6. Writing the cell chapters in parallel
 
-Once chapters 0, 1 and 2 are merged, the cell chapters (3–9) can be written at the same time, on separate branches or by separate agents, one chapter each. The risk is drift in notation and in depth. Chapter 0 (notation, template, toy) and one reviewer for all cell chapters control it.
+Once chapters 0, 1 and 2 are merged, the cell chapters (3–9) can be written at the same time, on separate branches or by separate agents, one chapter each. The risk is drift in notation and in depth. Chapter 0 (the problem notation and the toy), chapter 1 (the grid), the template of section 4, and one reviewer for all cell chapters control it.
 
 ## 7. Open decisions
 
@@ -191,10 +228,10 @@ Settle these in chapter 0. The numbers of the chapters are final only when the l
 1. **The toy: details.** The starting point is decided (see the decisions below): the running example of [quadratic-norm-report.md](quadratic-norm-report.md) (section 1.1), with task-based BOLD added. Open within it:
    - **The task.** The stimulus time series (for example a block or event design), the response model (a fixed response function, or a basis with its derivatives), and how lags enter: one lag for each region, or a lag that the analysis estimates.
    - **Where task BOLD falls in the cells.** The correlation of a voxel with a known stimulus has a numerator that is linear in the signal: a projection onto the stimulus, or a fit with the stimulus as a fixed basis over T. Its normalization by the voxel's power is quadratic. So task BOLD may need a cell with a linear output over T, which section 3 does not have yet (it would go between chapters 6 and 7), or a fixed basis over T in chapter 4.
+   - **The prior.** The distribution of each element of the object and its changes (which parameters are drawn, and over what ranges), and how many draws make the expected loss stable enough to explain a mechanism.
    - **The mechanism of experiment 1a.** Whether to add a design parameter that shows it (a local, signal-weighted τ mismatch near the centre of k-space), for example a relaxed and a hairpin petal family.
 2. **Chapter 9.** Whether to write it. No current requirement uses it.
-3. **The end point of chapter 10.** Whether the synthesis stops at the table of pressures, as directions of the trajectory's representation, or goes on to a design objective. An objective would overlap with the greedy schedule and the shape solve of [example-requirements-design.md](example-requirements-design.md), sections 5 and 6.
-4. **Location.** Where the chapters go, for example `docs/representation/`.
+3. **Location.** Where the chapters go, for example `docs/representation/`.
 
 | date | decision |
 |---|---|
@@ -208,3 +245,9 @@ Settle these in chapter 0. The numbers of the chapters are final only when the l
 | 2026-10-16 | Motion is out of scope. The series is to inform the simplest and most informative first on-scanner tests, and motion is unlikely to help with that. |
 | 2026-10-16 | The chapters are numbered 0–11 in reading order. Cells are named, and referred to by their chapter, not by numbers of their own (section 3). |
 | 2026-10-16 | The trajectory is the design operator component. Its representation (shapes, rotations, schedule) is treated in chapter 1, and the pressures are directions of it (section 1.2). The form of the representation is fixed for the series, and its values are designed before the object is seen. Optimization during the scan is out of scope, a later exploration like motion. |
+| 2026-10-16 | Keep the word "pressure", defined as an informal, soft claim with a direction, a sign, a rough strength, a constraint and a status. Hard requirements that make an estimator invalid are "conditions". Conditions filter designs; pressures rank them (section 4). |
+| 2026-10-16 | Frame the problem in three parts: what is chosen before the scan, what is known before the scan, and what is done with the data. The series is the design of the encoding, given stated priors and outputs, for given families of reconstruction. Other design variables (TR, flip angle, RF phase scheme, ADC window, scan length, coil) are held at the defaults; the analysis of the outputs is out of scope (section "The overall problem"). |
+| 2026-10-16 | Chapter 0 restates the framing as optimal experimental design, and every other chapter refers back to it for its outputs, priors and design variables. |
+| 2026-10-16 | The toy has the structure of the experimental-design framing: explicit design variables, a stated prior distribution from which its objects are drawn, the outputs and the loss of each cell, the estimator, and the expected loss over the prior and the noise. |
+| 2026-10-16 | Chapter 0 is the design problem alone: the framework, the problem notation, the design and nuisance components, the priors, the outputs, pressures and conditions, then the 1D toy (simulated) and the 5D problem (described, not simulated) as two instances. The grid opens chapter 1. The template of the cell chapters stays in this plan. The numbering 0–11 is unchanged. |
+| 2026-10-16 | Chapter 10 does not choose a design objective. It stops at the conditions and the table of pressures; a unified objective is later work that needs more research. |
