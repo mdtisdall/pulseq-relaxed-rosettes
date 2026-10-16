@@ -412,8 +412,11 @@ def _cmd_frame_potential(args: argparse.Namespace) -> int:
     try:
         from relaxed_rosettes.recon.framepotential import (
             RequirementsConfig,
+            averages_tau,
             format_frame_potentials,
+            format_tau_averaging,
             frame_potential,
+            tau_averaging,
         )
     except ImportError as e:
         print(f"error: frame-potential needs the recon extra ({e})", file=sys.stderr)
@@ -440,6 +443,18 @@ def _cmd_frame_potential(args: argparse.Namespace) -> int:
         unknown = names - {r.requirement.name for r in results}
         print(f"error: unknown requirement(s): {', '.join(sorted(unknown))}", file=sys.stderr)
         return 1
+    averaging = {
+        r.requirement.name: tau_averaging(
+            r.requirement,
+            trajectory,
+            design.geometry.fov_m,
+            object_size_m=config.object_size_m,
+            spectrum_power=config.object_spectrum_power,
+            batch_trs=config.batch_trs,
+        )
+        for r in results
+        if averages_tau(r.requirement)
+    }
     if args.json:
         report = {
             "config_digest": design.digest(),
@@ -453,6 +468,11 @@ def _cmd_frame_potential(args: argparse.Namespace) -> int:
                     "samples": r.samples,
                     "ratio": r.ratio,
                     "cv": r.cv,
+                    "tau_averaging_mismatch": (
+                        averaging[r.requirement.name].mismatch
+                        if r.requirement.name in averaging
+                        else None
+                    ),
                 }
                 for r in results
             ],
@@ -463,6 +483,8 @@ def _cmd_frame_potential(args: argparse.Namespace) -> int:
             f"# config {design.digest()}, requirements {config.digest()}\n"
             + format_frame_potentials(results)
         )
+        if averaging:
+            print("\n# tau averaging\n" + format_tau_averaging(list(averaging.values())))
     return 0
 
 
@@ -876,7 +898,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     frame = commands.add_parser(
         "frame-potential",
-        help="frame potential of each requirement's reconstruction model (recon extra)",
+        help="frame potential of each requirement's reconstruction model, and the tau-averaging "
+        "mismatch of those that average tau and scan time (recon extra)",
     )
     frame.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
     frame.add_argument(

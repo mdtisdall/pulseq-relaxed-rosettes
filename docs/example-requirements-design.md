@@ -27,7 +27,7 @@ From [coverage-target.md](coverage-target.md), sections 2–4:
 
 - **Two curves.** The navigator and the static image anchor the curve with τ averaged, $W^*_{\text{avg}}(\text{res})$. The relaxation 4D image anchors the curve with τ resolved, $W^*_{\tau}(\text{res}; L)$, which costs about $L$ times the samples, for a τ basis of rank $L$.
 - **BOLD is a priority, not an anchor.** It is read off the two curves at $T$ = 0.5 s, with a preference for a small $L$ (2–4 τ values to separate T2\* from $S_0$).
-- **Averaging needs no correlation.** An image averaged over τ is clean only if the τ distribution of the samples is about the same at every $|k|$; the same holds for T.
+- **Averaging needs a local match.** An image averaged over τ is clean only if the samples in each Nyquist cell have about the readout's mix of τ, in the cells where the object's signal is: near the centre of k-space. The same τ distribution at every $|k|$ is not enough: in experiment 1a, designs with the same per-shell τ statistics differed by a factor of 2 in error (section 3.2, the τ-averaging mismatch). The same holds for T.
 - **Variation over T, for BOLD.** In a continuous model there are no window boundaries. The concern is the temporal spectrum of the sampling: coherent structure in the BOLD band (about 0.01–0.1 Hz) or at the respiratory and cardiac frequencies adds false signal; incoherent variation raises the noise floor; variation pushed above about 1/(0.5 s) (blue noise in T) mostly falls outside the band. The current TR order is a random shuffle: no coherent structure, but white variation.
 
 ## 3. The objective: conditioning of each reconstruction
@@ -47,7 +47,7 @@ Each requirement is a linear model $x(r, \tau, T) = \sum c \, \phi_l(\tau)\, b_j
 
 BOLD analysis can work on the spline coefficients directly instead of on windowed images.
 
-**Averaging is a model choice.** The static reconstruction with $L$ = 1 treats the real τ variation of the signal as model error; the no-correlation condition of section 2 keeps that error incoherent. The alternative is to reconstruct with the full τ basis and average afterwards: more expensive, and it removes the condition.
+**Averaging is a model choice.** The static reconstruction with $L$ = 1 treats the real τ variation of the signal as model error; the local match of section 2 keeps that error small, and the τ-averaging mismatch (section 3.2) measures it. The alternative is to reconstruct with the full τ basis and average afterwards: more expensive, and it removes the condition.
 
 ### 3.2 The frame potential
 
@@ -73,6 +73,15 @@ $$
 
 with the priorities $\alpha$ of the requirements, swept over $\mu$ to trace the front.
 
+**The τ-averaging mismatch.** The frame potential measures how well the samples determine the model, not how wrong the model is. A requirement that averages τ fits decaying data with one value per voxel, and the error that leaves depends on where the samples of each τ fall, which the frame potential with $K_\tau = 1$ cannot see (experiment 1a). For each Nyquist cell $c$ in the ball, compare the mean of each decay-basis function over the samples in the cell with its mean over the readout, and weight by the energy $s_l^2$ of the basis function and by a prior object spectrum $S(k) = 1 / (1 + (\lvert k \rvert\, d)^p)$:
+
+$$
+E_\tau \;=\; \frac{\sum_c S(k_c) \sum_l s_l^2 \big(\bar\phi_{l,c} - \bar\phi_l\big)^2}{\sum_c S(k_c) \sum_l s_l^2\, \bar\phi_l^{\,2}} ,
+\qquad (3)
+$$
+
+with object size $d$ = 0.2 m and $p$ = 4 (a piecewise-smooth object). It is 0 when every occupied cell sees the readout's mix of τ. Requirements that average τ add $\mu\, \beta_{\text{req}} E_{\tau,\text{req}}$ to (2); the weight $\beta$ is not set yet. It is cheap: one pass over the samples, about 8 s for a 1 mm design. Implemented for requirements that average both τ and T (`tau_averaging` in `relaxed_rosettes.recon.framepotential`, printed by `relaxed-rosettes frame-potential`); a version for each window of T, for the navigator, is not.
+
 - **It is measure 8 of the report with its kernel chosen.** The kernel is the squared model kernel of each reconstruction, not a free choice. That settles the kernel-shape question: the Hann taper matters because it makes $K$ local and smooth, and so the objective cheap and well-behaved.
 - **In Fourier terms it is weighted aliasing energy.** For translation-invariant kernels, the kernel sum equals the energy of the point-spread function weighted by the kernel's Fourier transform. So each term is the aliasing energy of that reconstruction's PSF, counted only where it lands inside the model: inside the field of view, within the τ basis, and at the temporal frequencies the T basis resolves. For BOLD, the weight in temporal frequency can be shaped to the BOLD band and the physiological frequencies, so the k–T spectral score of section 2 becomes part of the objective.
 - **It replaces the energy distance** of the repulsion (PR #23), which the report found misaligned with coverage.
@@ -83,7 +92,7 @@ with the priorities $\alpha$ of the requirements, swept over $\mu$ to trace the 
 **Caveats.**
 
 - Coils are ignored: these are Nyquist-level frames ($R$ = 1). A coil-aware kernel is the principled way to bring in $R(\text{res})$ later.
-- The frame potential is an average-case measure. Measure 3 (the worst holes) stays as the score.
+- The frame potential is an average-case measure. Measure 3 (the worst holes) did not rank the static reconstruction error in 1a (I and J, with gaps of 4–7 cells, reconstruct as well as G); it stays as a check of holes, not as the score.
 - Each term alone favours uniform density within its ball. *Hypothesis:* the weighted sum of nested terms gives the centre-heavy density that the curves need. Its relation to the SNR-optimal `filter` density is not worked out.
 - Nonlinear reconstructions (for example low-rank 5D) are outside this argument.
 
@@ -99,7 +108,7 @@ with the priorities $\alpha$ of the requirements, swept over $\mu$ to trace the 
 | navigator (about 3 TRs) | almost all: the 8 mm ball is about 17 000 cells and one TR has 14 000 samples weighted to the centre, so each shape must cover the coarse ball nearly by itself, in all directions | the 2–3 neighbouring TRs fill each other's angular holes (a local term) |
 | BOLD (10 TRs) | the radial density, and the spread of τ at each radius (the small $L$) | the angular fill across the 10 TRs, and the k–T spectrum (no periodicity; variation above the band): entirely a schedule property |
 | relaxation 4D (whole scan) | that every radius is sampled in every τ group: a property of the $(\lvert k \rvert, \tau)$ distribution, which rotations cannot change; it can hold over the library, with shapes whose petal orders in τ complement each other | the angular fill of each τ group over the whole scan (a global term) |
-| static (whole scan, about 600 TRs to fill) | the radial density, and no $\lvert k \rvert$–τ correlation (again over the library) | the angular fill over the whole scan, and the early-stop property (section 5) |
+| static (whole scan, about 600 TRs to fill) | the radial density, and most of the τ-averaging mismatch (again over the library; in 1a, designs with the same schedule differed by a factor of 7.5 in it) | the angular fill over the whole scan, and the early-stop property (section 5) |
 | cost (slew energy) | all of it: slew energy does not change under rotation | none; PNS and acoustics depend somewhat on which gradient axis carries the slew |
 | spoiling (section 5.1) | the size of the spoil moment, and its direction relative to the shape's petals | the direction of each TR's spoil moment, so where the spoiled magnetization of every earlier TR lies when the next readouts sample k-space |
 
@@ -109,7 +118,7 @@ By window length: windows of about one TR (navigator) are set by the shapes; win
 
 1. **The cost axis of the front is a shape problem.** The schedule improves coverage at no slew cost, so optimizing it moves designs toward the front for free. This argues for doing the schedule first. It is not free in spoiling, though: the rotation that places a TR's samples also places its spoiled magnetization (section 5.1).
 2. **The shape objective gets only the terms the shapes control:** the coverage terms on $(\lvert k \rvert, \tau)$, the coarse angular coverage of each shape for the navigator, and slew energy. Within-shape repulsion at fine scales is of little use, since fine angular fill comes from the schedule; this agrees with the report's finding that only coarse scales (4–8 mm) are reachable within one shape.
-3. **Some requirements belong to the library, not to single shapes:** the $(\lvert k \rvert, \tau)$ coverage for relaxation 4D and the no-correlation condition for the static image hold over a set of shapes. So the library is designed as a set. A window short enough to contain only a few shapes (BOLD's 10 TRs) sees only part of that complementarity, so the schedule should also mix the shapes in time. The schedule's choice of how often to use each shape feeds back into the radial density.
+3. **Some requirements belong to the library, not to single shapes:** the $(\lvert k \rvert, \tau)$ coverage for relaxation 4D and the τ-averaging match for the static image hold over a set of shapes. So the library is designed as a set. A window short enough to contain only a few shapes (BOLD's 10 TRs) sees only part of that complementarity, so the schedule should also mix the shapes in time. The schedule's choice of how often to use each shape feeds back into the radial density.
 
 ## 5. The schedule: greedy across TRs
 
@@ -323,7 +332,8 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
      | H0 | 119.9 | 0.089 | 0.067 |
 
      It reproduces both effects, the family split and its disappearance at R2\* = 0, about 12 times faster than 1 mm.
-   - Decision and next: keep the static frame potential as the sampling term. The objective needs a second term, for the τ-averaging model error of an averaged model. This bears on the no-correlation condition of section 2 and on experiment 6: the per-shell τ statistics did not detect the difference, so the cause must be local, among samples near each other in k. *Hypothesis*, to test at Tier 0 or 1 before the term is designed.
+   - Decision and next: keep the static frame potential as the sampling term. The objective needs a second term, for the τ-averaging model error of an averaged model. This bears on the no-correlation condition of section 2 and on experiment 6: the per-shell τ statistics did not detect the difference, so the cause must be local, among samples near each other in k.
+   - **1a, diagnosis** (2026-10-16, Tier 1; local results in `data/tau-model-error-2026-10-16/`). The hypothesis holds. Binned into Nyquist cells, the relaxed designs sample the high-signal cells near the centre at different τ: weighted by the phantom's signal, the spread of the cells' mean decay is 0.12–0.16 for A–E and H, against 0.035–0.064 for the others; weighted by sample count, 0.030–0.045 for all, and within cells about 0.26 for all. That led to the τ-averaging mismatch (section 3.2, equation 3). Over A–M at 1 mm it ranks the τ-averaging error (error with R2\* minus error at R2\* = 0) with Spearman 0.95 (Pearson 0.91), and the total error with 0.94; a flat prior does not (−0.35). The basis rank does not matter (rank 1 ranks as well as rank 6); the power can be 3–5; the object size must be 0.2–0.4 m, and at 0.1 m or less the ranking degrades. A and H0 share the schedule and differ by a factor of 7.5 in the mismatch, so the shapes set most of it.
 2. **Do nested terms give a centre-heavy density?** Tests the hypothesis of section 3.2.
    - Setup: a radial problem, with no waveforms: choose $D(\lvert k \rvert)$ to minimize $\sum \alpha\, \text{FP}$ over the four requirements' balls at a fixed number of samples. Compare with the `exponent` and `filter` densities and the measured curve (about $\text{res}^{-2.5}$).
    - Cheap. It shows whether the requirements imply a radial density by themselves.
@@ -336,7 +346,7 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 5. **A library with roles.** Tests section 6.1: $m$ roles complete together make every window of $m$ TRs complete, at lower slew energy than shapes that are each complete.
    - Setup: assign tip radii to τ slots across $m$ = 9 or 10 roles (3 × 3 nested), with the existing target and tip code, then the SCP shape solve.
    - Measures: the conditions of experiment 3 for every window of $m$ TRs, against a random library of the same size; the slew energy of each shape (the claim that shared obligations make shapes cheaper).
-6. **Is "no correlation" the right condition for averaging?** Tests sections 2 and 3.1: averaging is a model choice, and the condition has an $L$-projection form.
+6. **Is "no correlation" the right condition for averaging?** Tests sections 2 and 3.1: averaging is a model choice, and the condition has an $L$-projection form. Partly answered by 1a: the per-$\lvert k \rvert$ condition is not enough; the local, signal-weighted τ-averaging mismatch (section 3.2) is the condition to vary and score here.
    - Setup: the static 1 mm image of the phantom, reconstructed with $L$ = 1 directly, and with the full $L$ and then averaged. Vary the $\lvert k \rvert$–τ correlation of the library on purpose (for example, tip radii ordered by τ).
    - Decision: whether the artefact level follows the $L$-projection mismatch of experiment 3, and whether reconstructing with the full basis is worth its cost.
 7. **Aliasing from the period of the roles.** Tests the risk of section 6.1: a cardiac harmonic near 2 Hz aliasing into the BOLD band.
@@ -368,6 +378,7 @@ A full 1 mm run of 1a takes about 20 min and 13 GB. Most questions do not need i
 | 2026-10-15 | B0 over T: scanner drift and respiration are in scope; head motion is important but waits for a motion model. The model is the static map plus a few modes, found in each subject's data inside a rich spatial basis (spherical harmonics up to order 2–3, later a population basis); the design targets that population span, the reconstruction the subject's modes. Bound the estimate and measure the change on the phantom scans before building it ([b0-scan-time-plan.md](b0-scan-time-plan.md)). |
 | 2026-10-16 | From 1a: the static frame potential stays as the sampling term. The objective needs a term for the τ-averaging model error of an averaged model (*hypothesis*: a local effect among samples near each other in k; test at Tier 0 or 1). |
 | 2026-10-16 | Experiments run at the cheapest tier that answers them (section 7.3). |
+| 2026-10-16 | The τ-averaging model error is scored by the τ-averaging mismatch (section 3.2, equation 3), with object size 0.2 m and spectrum power 4. Its weight in the objective is not set. |
 
 ## 9. Conclusion
 
