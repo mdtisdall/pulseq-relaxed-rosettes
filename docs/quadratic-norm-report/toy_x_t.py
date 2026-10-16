@@ -11,7 +11,9 @@ components psi_j in the band. Two estimators:
 - U-statistic: the same, without the t = t' terms, q_U = q - (J / N) sum_t |z_t|^2.
 
 ``readout_timing`` drops the assumption that a TR is an instant: sample s of TR p
-is at time p TR + tau_s, and the image decays with tau.
+is at time p TR + tau_s, and the image decays with tau. ``energy_tau_t`` is the
+energy over tau and T (application 1); ``lagged_cross`` the lagged correlation
+between regions (application 3).
 
 Run: python docs/quadratic-norm-report/toy_x_t.py (about a minute). Seeded.
 """
@@ -264,8 +266,152 @@ def readout_timing() -> None:
             )
 
 
+def energy_tau_t() -> None:
+    """The energy over tau and T of a decaying image: the DC term and the total power."""
+    rng = np.random.default_rng(5)
+    samples, readout_s, n_tr, half_width = 32, 0.045, 1000, 5
+    taus = (np.arange(samples) + 0.5) * readout_s / samples
+    d_tau = readout_s / samples
+    r = np.arange(M)
+    density = (np.abs(r - M / 2) < M / 4) * (1 + 0.3 * np.cos(2 * np.pi * r / 16))
+    obj = density > 0
+    r2star = 20 + 30 * r / M
+    field_hz = 60 * np.sin(2 * np.pi * r / M)  # known, and corrected
+    x = density[:, None] * np.exp((-r2star[:, None] + 2j * np.pi * field_hz[:, None]) * taus)
+    k_space = np.fft.fft(x, axis=0, norm="ortho")  # (M, samples)
+    # The total power is invariant to a phase that changes over T, so it is the same truth
+    # for every case.
+    energy = n_tr * d_tau * np.sum(np.abs(x) ** 2, 1)
+    # A real tau basis for the decays (the field is demodulated first).
+    decays = np.exp(-np.outer(taus, np.linspace(10, 60, 11)))
+    u_basis, singular, _ = np.linalg.svd(decays, full_matrices=False)
+    rank = int(np.searchsorted(np.cumsum(singular**2) / np.sum(singular**2), 1 - 1e-5)) + 1
+    basis = u_basis[:, :rank]
+    # Fourier components over T for the total power: |j| <= half_width bins.
+    bins = np.arange(-half_width, half_width + 1)
+    psi = np.exp(2j * np.pi * np.outer(np.arange(n_tr), bins) / n_tr) / np.sqrt(n_tr)
+    j_over_n = len(bins) / n_tr
+    print(
+        f"\nEnergy over tau and T: {n_tr} TRs, {samples} samples per TR, tau basis of rank {rank}"
+    )
+    print("noise  drift   estimator                  object mean (std)   background")
+    for noise, cycles in ((0.0, 0.0), (0.3, 0.0), (0.0, 0.5)):
+        drift = np.exp(2j * np.pi * cycles * np.arange(n_tr) / n_tr)  # a phase over T
+        results: dict[str, list[NDArray[np.float64]]] = {
+            "squared tau-average": [],
+            "DC term, plain": [],
+            "DC term": [],
+            "total power": [],
+            "DC term, halves": [],
+            "total power, halves": [],
+        }
+        for _ in range(32):
+            k = np.array([rng.choice(M, samples, replace=False) for _ in range(n_tr)])
+            shape = (n_tr, samples)
+            white = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+            y = k_space[k, np.arange(samples)[None]] * drift[:, None] + noise * white / np.sqrt(2)
+            # Each sample alone gives an unbiased image at its tau (k uniform over the TRs).
+            phase = np.exp(2j * np.pi * k[..., None] * r / M) / np.sqrt(M)
+            u = M * y[..., None] * phase
+            u = u * np.exp(-2j * np.pi * field_hz * taus[:, None])[None]  # demodulate the field
+            mean_tau = u.mean(1)
+            results["squared tau-average"].append(
+                n_tr
+                * readout_s
+                * (np.abs(mean_tau.sum(0)) ** 2 - np.sum(np.abs(mean_tau) ** 2, 0))
+                / (n_tr * (n_tr - 1))
+            )
+            z = np.einsum("sl,psm->plm", basis.conj(), u)  # (TRs, rank, M)
+            dc = np.abs(z.sum(0)) ** 2
+            within = np.sum(np.abs(z) ** 2, 0)
+            results["DC term, plain"].append(n_tr * d_tau * np.sum(dc, 0) / n_tr**2)
+            results["DC term"].append(n_tr * d_tau * np.sum(dc - within, 0) / (n_tr * (n_tr - 1)))
+            components = np.einsum("pj,plm->jlm", psi.conj(), z)
+            band = np.sum(np.abs(components) ** 2, axis=(0, 1)) - j_over_n * np.sum(within, 0)
+            results["total power"].append(d_tau * band / (1 - j_over_n))
+            # Interleaved halves (odd and even TRs): both span the scan; keep the products
+            # between them.
+            halves = [2 * np.einsum("pj,plm->jlm", psi[h::2].conj(), z[h::2]) for h in (0, 1)]
+            cross = np.real(halves[0].conj() * halves[1])
+            results["DC term, halves"].append(d_tau * np.sum(cross[half_width], 0))
+            results["total power, halves"].append(d_tau * np.sum(cross, axis=(0, 1)))
+        for name, values in results.items():
+            v = np.array(values)
+            ratio = v.mean(0)[obj] / energy[obj]
+            spread = v.std(0)[obj] / energy[obj]
+            floor = v.mean(0)[~obj].mean() / energy[obj].mean()
+            print(
+                f"{noise:4.1f}   {cycles:4.1f}    {name:22s}     {ratio.mean():6.3f}"
+                f" ({spread.mean():.3f})      {floor:+.4f}"
+            )
+
+
+def lagged_cross() -> None:
+    """Lagged correlation between regions from the U-statistic cross-spectrum."""
+    rng = np.random.default_rng(7)
+    tr_s, samples, lag_s = 0.05, 32, 0.6
+    r = np.arange(M)
+    t = np.arange(N)
+    band_hz = BAND / (N * tr_s)
+    static = (np.abs(r - M / 2) < M / 4) * (1 + 0.3 * np.cos(2 * np.pi * r / 16))
+    regions = {name: np.abs(r - M / 2 - offset) < 4 for name, offset in (("A", 10), ("B", -20))}
+    regions["C"] = np.abs(r - M / 2 + 2) < 4
+    coefficients = rng.standard_normal(len(BAND)) + 1j * rng.standard_normal(len(BAND))
+    independent = rng.standard_normal(len(BAND)) + 1j * rng.standard_normal(len(BAND))
+
+    def course(c: Complex, delay: float) -> Complex:
+        out: Complex = np.exp(2j * np.pi * np.outer(t * tr_s - delay, band_hz)) @ c
+        return out * (0.01 / np.sqrt(np.mean(np.abs(out) ** 2)))
+
+    respiration = 0.02 * np.exp(2j * np.pi * 300 * t / N)
+    x = (
+        static[None] * (1 + respiration[:, None])
+        + regions["A"][None] * course(coefficients, 0.0)[:, None]
+        + regions["B"][None] * course(coefficients, lag_s)[:, None]
+        + regions["C"][None] * course(independent, 0.0)[:, None]
+    )
+    psi = temporal_basis()
+    lags = np.arange(-3, 3.001, 0.05)
+    shift = np.exp(2j * np.pi * np.outer(band_hz, lags))
+    voxel = {"A": M // 2 + 10, "B": M // 2 - 20, "C": M // 2 - 2}
+    truth_c = psi.conj().T @ (x - x.mean(0))
+
+    def correlation(c: Complex, z: Complex | None, u: int, v: int) -> NDArray[np.float64]:
+        cross = c[:, u].conj() * c[:, v]
+        power_u = np.sum(np.abs(c[:, u]) ** 2)
+        power_v = np.sum(np.abs(c[:, v]) ** 2)
+        if z is not None:  # leave out each TR's product with itself
+            w = np.abs(psi) ** 2
+            cross = cross - w.T @ (z[:, u].conj() * z[:, v])
+            power_u -= np.sum(w.T @ np.abs(z[:, u]) ** 2)
+            power_v -= np.sum(w.T @ np.abs(z[:, v]) ** 2)
+        out: NDArray[np.float64] = np.real(cross @ shift) / np.sqrt(abs(power_u * power_v))
+        return out
+
+    print(f"\nLagged correlation, band 0.05-0.4 Hz, S = {samples}; B is A delayed by {lag_s} s")
+    print("pair   true peak (lag)      estimated peak (lag)   max |error| over lags, mean (std)")
+    for pair in (("A", "B"), ("A", "C")):
+        u, v = voxel[pair[0]], voxel[pair[1]]
+        truth = correlation(truth_c, None, u, v)
+        estimates_r, errors = [], []
+        for _ in range(12):
+            c, z, _ = estimates(x, rng, samples)
+            est = correlation(c, z, u, v)
+            estimates_r.append(est)
+            errors.append(np.abs(est - truth).max())
+        mean_r = np.mean(estimates_r, 0)
+        i_true, i_est = np.argmax(np.abs(truth)), np.argmax(np.abs(mean_r))
+        print(
+            f"{pair[0]}-{pair[1]}    {truth[i_true]:+.3f} ({lags[i_true]:+.2f} s)"
+            f"       {mean_r[i_est]:+.3f} ({lags[i_est]:+.2f} s)"
+            f"        {np.mean(errors):.3f} ({np.std(errors):.3f})"
+        )
+
+
 if __name__ == "__main__":
     scaling()
     object_cases()
     leakage_spectrum()
     readout_timing()
+    energy_tau_t()
+    lagged_cross()
