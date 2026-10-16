@@ -46,15 +46,12 @@ Build each with `relaxed-rosettes shapes --set …`, `sequence` and `check` (REA
 
 ## 3. Trajectory check
 
-Before judging either reconstruction, estimate the gradient delays from the data, so that a failure can be assigned to the trajectory or to the reconstruction.
+Before judging either reconstruction, estimate the gradient delays from the data, so that a failure can be assigned to the trajectory or to the reconstruction. Implemented as `relaxed-rosettes delays` (`relaxed_rosettes.recon.delays`; README, "Gradient delays").
 
-- **Model.** A delay $\delta_i$ on physical axis $i$ moves $k$ at a crossing by $-\gamma D g$, with $D = 	ext{diag}(\delta_x, \delta_y, \delta_z)$ and $g = R\, g_{shape}$ the physical gradient there. To first order, the echo then peaks later by $\Delta t = g^	op D g / \lVert g 
-Vert^2 = \sum_i \delta_i\, g_i^2 / \lVert g 
-Vert^2$, which is linear in $\delta$, with weights that change with the rotation of the TR.
-- **Measurement.** For each crossing of each TR, the time of the peak of the coil-combined magnitude, to a fraction of a dwell (a parabola through the samples around the maximum), minus the nominal crossing time.
-- **Fit.** Least squares for $\delta_x, \delta_y, \delta_z$ over all crossings and TRs, with their uncertainties. Report also the residual miss distance perpendicular to $g$, $\gamma \lVert D g - (\hat g^	op D g)\, \hat g 
-Vert$, in cells: a delay that a time shift cannot absorb.
-- **Use.** Fit on P4 and on P1. Delays should agree between the two designs; if they do not, the model is incomplete (eddy currents), and a gradient impulse response is the next step. If the delays shift $k$ by more than a threshold at the peak gradient of P1 (proposed: 0.1 cell; fix it before the scan), correct the trajectory with them before the reconstruction.
+- **Model.** A delay $\delta_i$ on physical axis $i$ plays that axis late, so near a crossing the path is $k(t) = \gamma\,(g\,(t - t_c) - D g)$, with $D = \mathrm{diag}(\delta_x, \delta_y, \delta_z)$ and $g = R\, g_{shape}$ the physical gradient there. The echo peaks where the path is closest to the peak $k_0$ of the object's spectrum, measured in the shape $Q$ of that peak ($|S(k)| \approx S_0 (1 - (k - k_0)^\top Q (k - k_0)/2)$, with $Q$ the identity for a sphere): $\Delta t = g^\top Q D g / g^\top Q g + g^\top Q k_0 / (\gamma\, g^\top Q g)$. This is linear in $\delta$, with weights that change with the rotation of the TR. With unequal delays the path misses $k = 0$ sideways, so $Q$ matters: with $Q$ taken as the identity, the default (elongated) phantom gave delays biased by about 10% of their differences. $k_0$ is a static offset (object phase) plus $-\gamma G \tau$ for a background gradient $G$; these terms are odd in the direction of $g$ and the delay terms even, so the rotations separate them. Equal delays on all axes are a shift of the ADC relative to the gradients.
+- **Measurement.** For each crossing of each TR, the time of the peak of the coil-combined magnitude (prewhitened root sum of squares), to a fraction of a dwell (a parabola through the largest sample and its neighbours), and the curvature of that parabola, which is proportional to $g^\top Q g$ and so gives $Q$ (up to scale) by linear least squares.
+- **Fit.** Least squares for the delays, $k_0$ and $G$ (9 parameters) over all crossings and TRs, with their uncertainties, iterated around the trajectory delayed by the current estimate until the update is below 1% of its standard error; outliers beyond 5 scaled MADs are dropped. Report also the miss distance perpendicular to $g$, $\gamma \lVert D g - (\hat g^\top D g)\, \hat g \rVert$, in cells: what a time shift cannot absorb.
+- **Use.** Fit on P4 and on P1. Delays should agree between the two designs; if they do not, the model is incomplete (eddy currents), and a gradient impulse response is the next step. If the delays shift $k$ by more than a threshold at the peak gradient of P1 (proposed: 0.1 cell; fix it before the scan), correct the trajectory with them before the reconstruction (`export-traj --gradient-delays-s`).
 
 ## 4. Candidates
 
@@ -101,7 +98,7 @@ If contamination is found, its attribution says where it comes from. Rotation te
 
 Small steps, each with tests on simulated data:
 
-0. **Delay estimate:** a function in `relaxed_rosettes.recon` that finds the echo peak of each crossing in the ISMRMRD data and fits the per-axis delays of section 3 (tested on data simulated with known delays), and an option to apply them to the exported trajectory.
+0. **Delay estimate:** a function in `relaxed_rosettes.recon` that finds the echo peak of each crossing in the ISMRMRD data and fits the per-axis delays of section 3 (tested on data simulated with known delays), and an option to apply them to the exported trajectory. Done: `relaxed-rosettes delays`, `simulate --gradient-delays-s` and `export-traj --gradient-delays-s` (section 8).
 1. **Crossing navigator:** a function in `relaxed_rosettes.recon` that selects the samples within $\varepsilon$ of $k = 0$ for each shape, reads them for every TR from the ISMRMRD data, whitens them, and interpolates them onto the common $\tau$ grid.
 2. **Window navigator:** windows of TRs for `Selection`, and gridding of each window, reusing `gridding` and the time-averaged coil maps.
 3. **Analysis:** SVD, noise edge, regressions and the simulated modulation, written to an `.npz` file (no plotting in this package), through a CLI command (for example `relaxed-rosettes basis-test`).
@@ -110,4 +107,13 @@ The phantom data and its results stay out of the repository; the code, the confi
 
 ## 8. Results
 
-Not run yet.
+**Step 0, delay estimate, on simulated scans** (2026-10-15). P4 and P1 as built for the scan (`data/phantom-2026-10-15/v2`), the default phantom (no off-resonance, `noise_relative` 1e-3, one coil), simulated with delays $(\delta_x, \delta_y, \delta_z) = (3, -2, 5)$ µs and without delays:
+
+| design | crossings used | true delays (µs) | estimate (µs) | without delays (µs) | residual RMS |
+|---|---|---|---|---|---|
+| P4 | 45 405 of 48 976 | 3, −2, 5 | 2.991, −2.013, 4.989 | −0.008, −0.005, −0.005 | 0.15 µs |
+| P1 | 44 402 of 44 954 | 3, −2, 5 | 2.992, −2.023, 4.981 | 0.000, 0.000, −0.002 | 0.05 µs |
+
+The error is at most 0.025 µs, under 0.01 cells at P1's peak gradient of 28 mT/m, well under the 0.1-cell threshold of section 3. The reported standard errors (0.001–0.002 µs) are statistical only and understate it. The fitted $Q$ has eigenvalues 0.78, 0.99, 1.23 (trace 3), as the squared semi-axes of the phantom's head ellipsoid give (0.77, 0.99, 1.24). Each estimate took about 5 s and under 1 GB. Not yet tested: noise at the scanner's level, many coils, off-resonance, and a background gradient.
+
+The basis test itself has not run yet.

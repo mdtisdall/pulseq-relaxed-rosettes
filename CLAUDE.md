@@ -46,7 +46,8 @@ this project:
 
 - Default branch: `main`. Merge method: squash.
 - Checks, before each PR (CI runs the same checks):
-  `nix develop --command scripts/check`
+  `nix develop --command scripts/check`. When a PR changes only Markdown
+  files, CI runs only the relative link check, `scripts/check_links.py`.
 - Worktrees: one for each task, in `.worktrees/<short-name>` of the main
   checkout (git-ignored), made with the `start-task` skill. Do not create a
   worktree outside the project directory, inside another worktree, or with a
