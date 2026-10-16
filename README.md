@@ -92,6 +92,15 @@ It prints two tables (window length × resolution, median and worst over start t
 
 It also reports the sampling of the (|k|, time since excitation) plane over the whole scan: the fraction of (|k| shell × τ bin) cells with no sample (overall, early in the readout, and in the outer half of k-space) and the longest τ gap in any shell. Rotations do not change |k|(t), so only the shapes sample this plane; more shapes (`shapes.num_shapes`), not more TRs, fill it in.
 
+Check the gradient spoiling of the schedule:
+
+```
+uv run relaxed-rosettes spoiling relaxed_rosettes.seq
+uv run relaxed-rosettes spoiling relaxed_rosettes.seq --rotations random --rf-phase quadratic117
+```
+
+Each TR ends at its shape's spoil moment, turned by the TR's rotation, so the schedule decides where the spoiled magnetization of earlier TRs lies when later readouts sample k-space. `relaxed_rosettes.spoiling` follows one voxel through every TR (dummies included) with an extended phase graph whose states are continuous 3D dephasing vectors: the RF pulse with the TR's phase, the TR's readout path, T1 and T2 relaxation, diffusion, and the rotated spoil moment. A coherence dephased by `k` is sampled where the readout passes `-k`; the report sums the spurious amplitude (relative to each TR's FID) of the coherences whose closest approach to the TR's samples is within 1, 3 and 10 cells, split into transverse chains, conjugated and stored (stimulated) pathways; the fraction of TRs whose spurious amplitude within 3 cells exceeds 1% and 10%; and, for a phantom (`--phantom`, default the built-in one; `--no-phantom` to skip), the spurious over expected signal energy of each TR, from the 32 strongest near coherences. `--tissue T1,T2[,D]` (repeatable) sets the voxel (default grey matter, 1.5 s, 90 ms, 0.8 µm²/ms, and CSF, 4 s, 1.5 s, 3 µm²/ms); `--rotations random` replaces the schedule's rotations with independent random ones (incoherent spoiling, a reference) and `--rf-phase` the RF phase scheme. States below `--threshold` (default 1e-5 of M0) are dropped and at most `--max-states` kept; a `*` marks a tissue that reached the cap. Intravoxel off-resonance (T2') is ignored, which overestimates transverse pathways. `-o` writes the per-TR arrays.
+
 Convert the scanner's raw data to ISMRMRD, the input of the reconstruction (needs the `recon` extra):
 
 ```

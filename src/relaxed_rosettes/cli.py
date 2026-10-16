@@ -23,7 +23,7 @@ from relaxed_rosettes.checks import (
     spectrum_report,
     timing_report,
 )
-from relaxed_rosettes.config import Config, ConfigError
+from relaxed_rosettes.config import Config, ConfigError, RfPhase
 from relaxed_rosettes.coverage import (
     format_ktau,
     format_metrics,
@@ -466,6 +466,107 @@ def _cmd_frame_potential(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_tissue(text: str) -> Any:
+    from relaxed_rosettes.spoiling import Tissue
+
+    try:
+        values = [float(v) for v in text.split(",")]
+    except ValueError:
+        values = []
+    if len(values) not in (2, 3) or min(values[:2]) <= 0 or (len(values) == 3 and values[2] < 0):
+        raise argparse.ArgumentTypeError(f"tissue {text!r} is not T1_S,T2_S[,D_M2_PER_S]")
+    return Tissue(*values)
+
+
+def _cmd_spoiling(args: argparse.Namespace) -> int:
+    from scipy.spatial.transform import Rotation
+
+    from relaxed_rosettes.recon.phantom import PhantomConfig
+    from relaxed_rosettes.sequence import rf_phases
+    from relaxed_rosettes.spoiling import (
+        NEAR_CELLS,
+        Tissue,
+        format_spoiling,
+        simulate_spoiling,
+    )
+
+    _, config, schedule, shapes = _load_seq_and_design(args.seq)
+    n = len(schedule.shape_index)
+    phases = None
+    if args.rf_phase != "schedule":
+        scheme = config.with_overrides([f"excitation.rf_phase={RfPhase(args.rf_phase).value}"])
+        phases = rf_phases(scheme, n, np.random.default_rng([config.seed, 8]))
+    rotations = None
+    if args.rotations == "random":
+        rng = np.random.default_rng([config.seed, 7])
+        rotations = Rotation.random(n, random_state=rng).as_matrix()
+    phantom = None
+    if not args.no_phantom:
+        phantom = PhantomConfig.load(args.phantom) if args.phantom else PhantomConfig()
+    tissues = args.tissue or [Tissue(1.5, 0.09, 0.8e-9), Tissue(4.0, 1.5, 3e-9)]
+    results = [
+        simulate_spoiling(
+            config,
+            schedule,
+            shapes,
+            tissue,
+            rf_phase_rad=phases,
+            rotation_matrix=rotations,
+            threshold=args.threshold,
+            max_states=args.max_states,
+            obj=phantom,
+        )
+        for tissue in tissues
+    ]
+    if args.output:
+        arrays: dict[str, Any] = {"near_cells": np.array(NEAR_CELLS)}
+        for j, r in enumerate(results):
+            arrays[f"tissue{j}"] = np.array(
+                [r.tissue.t1_s, r.tissue.t2_s, r.tissue.diffusion_m2_per_s]
+            )
+            arrays[f"fid{j}"] = r.fid
+            arrays[f"ideal_fid{j}"] = r.ideal_fid
+            arrays[f"near_amplitude{j}"] = r.near_amplitude
+            arrays[f"near_by_kind{j}"] = r.near_by_kind
+            arrays[f"closest_cells{j}"] = r.closest_cells
+            arrays[f"energy_ratio{j}"] = r.energy_ratio
+            arrays[f"states{j}"] = r.states
+        np.savez(args.output, config_digest=config.digest(), **arrays)
+    header = (
+        f"# config {config.digest()}, rf phase {args.rf_phase}, rotations {args.rotations}, "
+        f"flip {config.excitation.flip_angle_deg:g} deg, TR {config.readout.tr_s * 1e3:g} ms"
+    )
+    if args.json:
+        report = {
+            "config_digest": config.digest(),
+            "rf_phase": args.rf_phase,
+            "rotations": args.rotations,
+            "tissues": [
+                {
+                    "t1_s": r.tissue.t1_s,
+                    "t2_s": r.tissue.t2_s,
+                    "diffusion_m2_per_s": r.tissue.diffusion_m2_per_s,
+                    "fid_over_ideal": float(np.mean(r.fid / r.ideal_fid)),
+                    "fraction_trs_near_over_1pct": float(np.mean(r.near_amplitude[:, 1] > 0.01)),
+                    "fraction_trs_near_over_10pct": float(np.mean(r.near_amplitude[:, 1] > 0.1)),
+                    "near_cells": list(NEAR_CELLS),
+                    "near_mean": r.near_amplitude.mean(axis=0).tolist(),
+                    "near_max": r.near_amplitude.max(axis=0).tolist(),
+                    "near_by_kind_mean": r.near_by_kind.mean(axis=0).tolist(),
+                    "energy_mean": float(np.nanmean(r.energy_ratio)) if phantom else None,
+                    "energy_max": float(np.nanmax(r.energy_ratio)) if phantom else None,
+                    "max_states": int(r.states.max()),
+                    "capped": r.capped,
+                }
+                for r in results
+            ],
+        }
+        print(json.dumps(report, indent=2))
+    else:
+        print(header + "\n" + format_spoiling(results))
+    return 0
+
+
 def _cmd_grid(args: argparse.Namespace) -> int:
     try:
         from relaxed_rosettes.recon.gridding import reconstruct, save_gridding
@@ -894,6 +995,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     frame.add_argument("--json", action="store_true", help="print the results as JSON")
     frame.set_defaults(func=_cmd_frame_potential)
+
+    spoiling = commands.add_parser(
+        "spoiling",
+        help="residual coherences of the schedule's gradient spoiling (3D phase graph)",
+    )
+    spoiling.add_argument("seq", type=Path, help=".seq file, with its design .npz next to it")
+    spoiling.add_argument(
+        "--tissue",
+        type=_parse_tissue,
+        action="append",
+        default=[],
+        metavar="T1_S,T2_S[,D_M2_PER_S]",
+        help="tissue to simulate (repeatable; default: 1.5,0.09,0.8e-9 and 4,1.5,3e-9)",
+    )
+    spoiling.add_argument(
+        "--rf-phase",
+        choices=["schedule", *(p.value for p in RfPhase)],
+        default="schedule",
+        help="RF phase scheme (default: the design's)",
+    )
+    spoiling.add_argument(
+        "--rotations",
+        choices=["schedule", "random"],
+        default="schedule",
+        help="the design's rotations, or independent random ones (incoherent spoiling)",
+    )
+    spoiling.add_argument(
+        "--threshold",
+        type=float,
+        default=1e-5,
+        help="drop states below this amplitude (of M0; default 1e-5)",
+    )
+    spoiling.add_argument(
+        "--max-states", type=int, default=200_000, help="states kept (default 200000)"
+    )
+    spoiling.add_argument(
+        "--phantom", type=Path, help="phantom TOML for the energy ratio (default: built-in)"
+    )
+    spoiling.add_argument(
+        "--no-phantom", action="store_true", help="do not compute the energy ratio"
+    )
+    spoiling.add_argument("-o", "--output", type=Path, help="write the per-TR arrays (.npz)")
+    spoiling.add_argument("--json", action="store_true", help="print the summary as JSON")
+    spoiling.set_defaults(func=_cmd_spoiling)
 
     coverage = commands.add_parser(
         "coverage",
