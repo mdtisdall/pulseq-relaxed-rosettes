@@ -247,10 +247,83 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
    - Status: the static requirement can run with the existing code (sub-experiment 1a). The other three need reconstructions that do not exist yet: a τ-subspace CG-SENSE (relaxation 4D) and a CG-SENSE with a spline basis in T (navigator, BOLD). Add them after 1a, if 1a does not already revise the objective.
 
    **1a. The static requirement only.** Started 2026-10-15. The first gate: the static requirement is the one where the report found the energy distance misaligned with coverage, and its model (1 mm, τ and T averaged) is what `relaxed-rosettes sense` reconstructs now.
-   - Setup: designs A–M of the report (`data/sample-spreading-2026-10-15/`) and the 128-shape designs P1 and P4 (`data/phantom-2026-10-15/`), each built with `relaxed-rosettes sequence`. For each: the static frame potential (`frame-potential --only static`); `simulate` of the default phantom with off-resonance set to zero, once without noise and once with noise; `sense` at 1 mm, with no B0 correction, of both. The ground truth is the phantom's magnetization averaged over the τ of the selected samples. Error: the NRMSE of the noiseless reconstruction against the ground truth. Noise: the RMS of the difference between the noisy and the noiseless reconstructions. The real τ variation (R2\*) stays in the data, as the model error that the static model averages over (section 3.1).
-   - Before the runs in parallel: the memory and time of the frame potential and of `sense` on one design.
+   - Setup, as run (2026-10-15 to 2026-10-16; driver `run1a.py` and results in `data/experiment-1a-2026-10-15/`, local, not tracked): designs A–M of the report (16 shapes, 5000 TRs, 250 s), and as a separate group P1 (128 shapes) and its band-penalty variants P1pen1.1, P1pen1.5 and P1pen2.1 (16 shapes), all with 1500 TRs (75 s). For each: the static frame-potential ratio; measure 3 as the 1 mm gap (95th percentile, cells) of the whole scan, plus windows of 15, 30, 60 and 125 s; the energy distance; and the static reconstruction of the phantom, once without noise and once with noise. Error: the NRMSE of the noiseless reconstruction against the ground truth. Noise: the RMS of the difference between the noisy and the noiseless reconstructions, relative to the norm of the ground truth. The real τ variation (R2\*) stays in the data, as the model error that the static model averages over (section 3.1). All runs at commit 489f030; the trajectories of A, F, M and P1 are identical under a629a48.
+   - Changes from the plan, and why:
+     - P4 is dropped: it is a 4 mm design and cannot fill the 1 mm ball.
+     - The P1 group has 4 designs, too few for rank correlations. Its results are reported, not correlated.
+     - The A–M shape files predate the config fields of PR #32. Their config digests were re-stamped on copies. The new fields default to no band penalty, so the waveforms are unchanged.
+     - Reconstruction: not `simulate` and `sense`, but the driver: unweighted least squares plus Tikhonov (1e-3, relative to $A^H A / M$), one coil of sensitivity 1, no B0, CG from 0 for 30 iterations, with the noisy and the noiseless data as two channels of one CG. `sense` estimates coil maps from the data, prewhitens, and uses DCF-weighted least squares; none of these is the linear model that the frame potential scores.
+     - Ground truth: the phantom's analytic Fourier transform, averaged over the τ of the ADC samples, limited to the 1 mm ball on the Cartesian grid of the field of view, and transformed back: the image that perfect sampling of the ball would give.
+     - Phantom: the default, with off-resonance 0 (already the default), and with its scan-time modulations (vessel sines, BOLD blocks) removed, so that the static truth does not depend on T.
+     - Energy distance: the mean over shapes, to one common target for all designs: the `exponent` model (resolution–time exponent 2.5) of the default config.
+   - Before the runs in parallel: peak memory at most 14.1 GB per process; 3 processes at a time.
    - Decision: as for experiment 1, with the static term alone: the rank correlations with the error, and with the noise, of the static frame-potential ratio, of measure 3 at 1 mm, and of the energy distance. If the frame potential does not predict better, revise the objective before the other reconstructions are built.
-   - Results: not yet.
+   - Results (2026-10-16). A–M:
+
+     | design | FP ratio | gap (cells) | energy distance | error | noise |
+     |---|---|---|---|---|---|
+     | A | 232 | 1.21 | 0.0150 | 0.318 | 0.0419 |
+     | B | 268 | 1.29 | 0.0119 | 0.347 | 0.0361 |
+     | C | 274 | 1.23 | 0.0121 | 0.341 | 0.0371 |
+     | D | 284 | 1.15 | 0.0123 | 0.332 | 0.0355 |
+     | E | 282 | 1.15 | 0.0122 | 0.315 | 0.0340 |
+     | F | 715 | 1.43 | 0.0127 | 0.142 | 0.0222 |
+     | G | 749 | 1.09 | 0.0107 | 0.149 | 0.0207 |
+     | H | 284 | 1.14 | 0.0123 | 0.296 | 0.0324 |
+     | H0 | 715 | 1.36 | 0.0126 | 0.143 | 0.0222 |
+     | I | 748 | 3.95 | 0.0104 | 0.151 | 0.0218 |
+     | J | 734 | 7.28 | 0.0103 | 0.147 | 0.0220 |
+     | K | 670 | 2.88 | 0.0083 | 0.144 | 0.0212 |
+     | L | 699 | 2.33 | 0.0073 | 0.159 | 0.0203 |
+     | M | 427 | 1.84 | 0.0141 | 0.152 | 0.0265 |
+
+     The P1 group: error 0.148–0.169, noise 0.0326–0.0388.
+
+     Spearman rank correlations, A–M (14 designs):
+
+     | score | vs error | vs noise |
+     |---|---|---|
+     | frame potential | −0.80 | −0.86 |
+     | gap (measure 3) | −0.46 | −0.45 |
+     | energy distance | 0.09 | 0.63 |
+
+   - Reading:
+     - The gate fails as posed. A higher frame-potential ratio goes with a *lower* error (−0.80) and a lower noise (−0.86). The gap has the wrong sign too (−0.46).
+     - The error splits by waveform family, not by any of the three scores: the relaxed designs (A–E, H) 0.30–0.35; the hairpin and filter designs (F, G, H0, I–M) 0.14–0.16. H0 (hairpins on the relaxed targets) falls with the hairpins, so the waveform style matters, not the targets. I and J (gaps of 3.95 and 7.28 cells) reconstruct as well as G (1.09 cells).
+     - The extra error of the relaxed family is below 0.25 $k_{max}$: there its share of the error² is about 0.09 (A, E) against 0.011 (H0, F); above it, the same. In those shells the sample counts and the τ distributions are the same in both families (mean, standard deviation and 5–95% range of τ within 1–2 ms), so neither the radial density nor the $\lvert k \rvert$–τ correlation explains it.
+
+   **1a, control: R2\* = 0.** The same reconstructions of the phantom with every R2\* set to 0, so that the static model is exact and only the sampling (and Tikhonov) error remains. P1 group skipped.
+
+     | design | error (R2\*) | error (R2\* = 0) | noise (R2\* = 0) |
+     |---|---|---|---|
+     | A | 0.318 | 0.110 | 0.0266 |
+     | B | 0.347 | 0.120 | 0.0198 |
+     | C | 0.341 | 0.116 | 0.0220 |
+     | D | 0.332 | 0.121 | 0.0198 |
+     | E | 0.315 | 0.120 | 0.0199 |
+     | F | 0.142 | 0.135 | 0.0134 |
+     | G | 0.149 | 0.126 | 0.0164 |
+     | H | 0.296 | 0.123 | 0.0186 |
+     | H0 | 0.143 | 0.133 | 0.0137 |
+     | I | 0.151 | 0.132 | 0.0143 |
+     | J | 0.147 | 0.133 | 0.0136 |
+     | K | 0.144 | 0.125 | 0.0173 |
+     | L | 0.159 | 0.133 | 0.0133 |
+     | M | 0.152 | 0.132 | 0.0175 |
+
+   - Spearman, A–M, at R2\* = 0: frame potential +0.81 against the error and −0.84 against the noise; gap +0.55 and −0.56; energy distance −0.21 and +0.38.
+   - Reading: the relaxed family's extra error is τ-averaging model error. It falls from 0.30–0.35 to 0.11–0.12 at R2\* = 0, while the hairpin and filter designs change little (0.14–0.16 to 0.125–0.135). The static frame potential cannot see this error, because its model has τ averaged, and here it is the larger part. With it removed, the frame potential ranks the sampling error with the right sign, better than the gap, but over a narrow range (0.110–0.135), and it ranks the noise with the opposite sign: the high-ratio designs have less noise.
+   - Check at 4 mm (Tier 1, section 7.3), the static model at 4 mm on the same designs:
+
+     | design | FP ratio (4 mm) | error (R2\*) | error (R2\* = 0) |
+     |---|---|---|---|
+     | A | 41.9 | 0.287 | 0.055 |
+     | E | 50.6 | 0.289 | 0.062 |
+     | F | 121.4 | 0.091 | 0.069 |
+     | H0 | 119.9 | 0.089 | 0.067 |
+
+     It reproduces both effects, the family split and its disappearance at R2\* = 0, about 12 times faster than 1 mm.
+   - Decision and next: keep the static frame potential as the sampling term. The objective needs a second term, for the τ-averaging model error of an averaged model. This bears on the no-correlation condition of section 2 and on experiment 6: the per-shell τ statistics did not detect the difference, so the cause must be local, among samples near each other in k. *Hypothesis*, to test at Tier 0 or 1 before the term is designed.
 2. **Do nested terms give a centre-heavy density?** Tests the hypothesis of section 3.2.
    - Setup: a radial problem, with no waveforms: choose $D(\lvert k \rvert)$ to minimize $\sum \alpha\, \text{FP}$ over the four requirements' balls at a fixed number of samples. Compare with the `exponent` and `filter` densities and the measured curve (about $\text{res}^{-2.5}$).
    - Cheap. It shows whether the requirements imply a radial density by themselves.
@@ -276,6 +349,14 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 
 **Order.** Experiment 1 first, because 2, 4 and 5 optimize the frame potential. Experiments 2 and 3 are cheap and independent and can run beside 1. Experiment 4 needs only the evaluator; 5–7 need the τ basis and the phantom. Experiment 8(a) needs only the schedules, so it can run with experiment 4; 8(b) needs the phantom and the pathway simulation. If 1–5 leave a gap, alternate shapes and schedule (section 6).
 
+### 7.3 Tiers of cost
+
+A full 1 mm run of 1a takes about 20 min and 13 GB. Most questions do not need it. Ask each question at the cheapest tier that can answer it.
+
+- **Tier 0: exact small problems.** 3D at 16³–24³, or 2D at 32²–64², with $A$ explicit and its SVD: the exact error, noise and model error, in seconds. It tests whether an objective measures the right thing, not whether a design is good.
+- **Tier 1: the real designs, reduced.** The static model at 4 mm on the samples in its ball: about 100 s and 3.7 GB per run. Fewer TRs where the question allows. 1a's 4 mm check shows that it reproduces the effects found at 1 mm. A Toeplitz normal operator is a planned speed-up for full runs, not yet measured.
+- **Tier 2: full 1 mm runs**, only to confirm a conclusion before it goes into the plan or the objective.
+
 ## 8. Decisions
 
 | date | decision |
@@ -285,7 +366,9 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 | 2026-10-15 | Resolution in T means a smooth temporal basis in a continuous model, not fixed windows. |
 | 2026-10-15 | Experiment 1 starts with the static requirement alone (sub-experiment 1a), with the existing CG-SENSE; the other reconstructions come after it. |
 | 2026-10-15 | B0 over T: scanner drift and respiration are in scope; head motion is important but waits for a motion model. The model is the static map plus a few modes, found in each subject's data inside a rich spatial basis (spherical harmonics up to order 2–3, later a population basis); the design targets that population span, the reconstruction the subject's modes. Bound the estimate and measure the change on the phantom scans before building it ([b0-scan-time-plan.md](b0-scan-time-plan.md)). |
+| 2026-10-16 | From 1a: the static frame potential stays as the sampling term. The objective needs a term for the τ-averaging model error of an averaged model (*hypothesis*: a local effect among samples near each other in k; test at Tier 0 or 1). |
+| 2026-10-16 | Experiments run at the cheapest tier that answers them (section 7.3). |
 
 ## 9. Conclusion
 
-Not reached. The direction so far: design the schedule greedily against the frame potentials of the requirements' reconstructions and a spoiling term (section 5.1), then design the shapes for the $(\lvert k \rvert, \tau)$ terms and slew energy as $m$ complementary roles that the schedule cycles through, so that every window of $m$ TRs is complete, probably with tens of shapes rather than 128. The experiments of section 7 decide whether that holds.
+Not reached. The direction so far: design the schedule greedily against the frame potentials of the requirements' reconstructions, a term for the τ-averaging model error of the averaged models (experiment 1a), and a spoiling term (section 5.1), then design the shapes for the $(\lvert k \rvert, \tau)$ terms and slew energy as $m$ complementary roles that the schedule cycles through, so that every window of $m$ TRs is complete, probably with tens of shapes rather than 128. The experiments of section 7 decide whether that holds.
