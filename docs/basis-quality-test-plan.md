@@ -80,7 +80,7 @@ For each candidate's navigator matrix:
    - rotation: the 9 entries of the rotation matrix, and their products up to degree 2;
    - for candidate A, the mean $\tau$ of the crossings used.
 
-   Report the fraction of each component's variance explained by each group. Drift is real and stays in the basis; shape, rotation and $\tau$ terms are contamination.
+   Report the fraction of each component's variance explained by each group. Drift is real and stays in the basis; shape, rotation and $\tau$ terms are contamination. B0 drift is a phase that grows with $\tau$, so it adds components; once its estimator exists, remove it before the basis is estimated ([b0-scan-time-plan.md](b0-scan-time-plan.md), section 6).
 3. **Detection (positive control, by simulation).** Take the time-averaged CG-SENSE image, coil maps and field map of the phantom. Multiply the marker vial by $1 + a\,m(T)$, with $m$ a 0.05 Hz sinusoid plus a step at mid-scan. Generate data with the forward operator (`SenseOperator`) at the measured noise level, and run each candidate on it. Report the smallest $a$ (try 0.5%, 1%, 2%, 5%) at which the recovered basis spans $m$ (the correlation between $m$ and its projection onto the basis above 0.9).
 
 ## 6. Decision rule

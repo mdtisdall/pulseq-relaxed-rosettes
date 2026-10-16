@@ -219,7 +219,7 @@ Optimize one shape at a time, keeping the others fixed. For shape $s$, the energ
 
 Open decisions:
 
-- **Navigator tolerance** (`crossing_tolerance_cells`): how close to $k = 0$ must the crossings stay for the navigator and B0 analysis?
+- **Navigator tolerance** (`crossing_tolerance_cells`): how close to $k = 0$ must the crossings stay for the navigator and B0 analysis? The B0 estimator of [b0-scan-time-plan.md](b0-scan-time-plan.md) evaluates the forward model at the actual $k$, so its accuracy against the tolerance is one answer.
 - **Tip anchors in step 2:** keep the blue-noise tips, or let the density alone set the radii? Step 2 keeps them for now (section 3.3).
 - **Acoustics and PNS:** every step makes the gradients busier. Each chosen design needs `check --band` and `check --asc` (Cima.X) before scanning.
 - **Measured trajectories:** with eddy currents, the actual trajectory (from a gradient impulse response) is what matters. This plan designs the nominal trajectory. The recon uses the measured one.

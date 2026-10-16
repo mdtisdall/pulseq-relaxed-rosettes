@@ -82,7 +82,7 @@ With L segments, `Eᴴ W E = sum over (l, l') of P_l* T_ll' P_l'`, where `P_l` a
 | 2 mm | 256³ | 134 MB | 4.8 GB | 0.8 GB |
 | 1 mm | 512³ | 1.1 GB | 39 GB | 6.4 GB |
 
-So: Toeplitz without off-resonance or with the few segments that section 3.2 should give; NUFFT CG (with the plumbing of 3.1) as the fallback when the kernels do not fit. The right-hand side `Eᴴ W y` still needs one pass of adjoint NUFFTs.
+So: Toeplitz without off-resonance or with the few segments that section 3.2 should give; NUFFT CG (with the plumbing of 3.1) as the fallback when the kernels do not fit. The right-hand side `Eᴴ W y` still needs one pass of adjoint NUFFTs. A change of B0 over T ([b0-scan-time-plan.md](b0-scan-time-plan.md)) keeps this form at orders 0 and 1: a phase on each sample cancels in `Eᴴ W E`, and a linear gradient is a shift of the trajectory, so one kernel set from the corrected trajectory. Order 2 adds segments.
 
 ### 3.4 NUFFT accuracy (expected 1.5–2× on what remains)
 
