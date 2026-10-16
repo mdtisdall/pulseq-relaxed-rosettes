@@ -1,12 +1,12 @@
 # Recon optimization plan
 
-Status: plan. No step is implemented. The steps start only after a real scan has shown that the recon is correct (the minimal phantom test: localizer, product 3D GRE, Pulseq design A), and after the h5py read leak is fixed (section 5). Each step is then measured on that real dataset before the next one starts.
+Status: plan. No step is implemented. The steps start only after a real scan has shown that the recon is correct: the minimal phantom test with design P4 ([basis-quality-test-plan.md](basis-quality-test-plan.md), section 2), against a product 3D GRE. Each step is then measured on that real dataset before the next one starts. The h5py read leak that the first measurement found is fixed (PR #22; section 5).
 
 The gains in this plan are estimates from the code and from one profile of a simulation (section 1). As each step is implemented, record the measured time, memory, and image change in section 7, in the same PR as the step, and correct the estimates in the text where they were wrong.
 
 ## Question
 
-`sense` on a 64 s, 4 mm scan with 2 virtual coils took 18 minutes. With 12 virtual coils, which a 32-channel scan gets by default, it would take about 1–1.5 hours (CG scales with the coils; the estimation stages mostly do not), and 2 mm or 1 mm reconstructions far longer. Where does the time and memory go, and what can be cut without changing the images?
+`sense` on a simulated 64 s scan of design P4 (4 mm), with 2 virtual coils, took 18 minutes. With 12 virtual coils, which a 32-channel scan gets by default, it would take about 1–1.5 hours (CG scales with the coils; the estimation stages mostly do not), and 2 mm or 1 mm reconstructions far longer. Experiment 1a of [example-requirements-design.md](example-requirements-design.md) (section 7) runs `sense` at 1 mm, without the off-resonance term, on about 15 designs (A–M of the sample-spreading report, P1, P4), with and without noise. Where does the time and memory go, and what can be cut without changing the images?
 
 ## Short answer
 
@@ -15,12 +15,12 @@ Almost all the time (97%) is in FINUFFT, and it runs at a quarter of its speed b
 1. **Measure** (section 2): stage timings and peak memory in every output, and a fixed benchmark.
 2. **Exact plumbing** (section 3.1): larger NUFFT calls, reused FINUFFT plans, segments × coils in one call. Same images, about 2–4× faster.
 3. **Cheaper estimation** (section 3.2): coil maps and the field map on a coarse grid, one density compensation shared by all τ windows, and the number of off-resonance segments chosen from the field map. Removes about a third of the run time and most of the CG cost for a well-shimmed object.
-4. **Toeplitz CG** (section 3.3): the normal operator as FFTs on a 2n grid, with no NUFFT per iteration. CG drops from minutes to seconds at 4 mm. Memory-heavy with many segments at fine resolution.
+4. **Toeplitz CG** (section 3.3): the normal operator as FFTs on a 2n grid, with no NUFFT per iteration. CG drops from minutes to seconds at 4 mm. Without the off-resonance term, as in experiment 1a, it needs a single kernel (1.1 GB at 1 mm). Memory-heavy with many segments at fine resolution.
 5. **Looser NUFFT accuracy** (section 3.4), and **memory trims** (section 4).
 
 ## 1. Baseline
 
-`main` at `574cfaa` (PR #21). Design A: 4 mm, FOV 256 mm (64³), TR 40 ms, 10000 ADC samples, 1500 TRs, 128 shapes (58–62 echoes per TR). Simulated scan: a body blob and a marker blob, 4 coils with correlated noise, uniform 20 Hz off-resonance; recon with 2 virtual coils and the other recon defaults (8 segments, 12 B0 windows, 10 DCF iterations, 20 CG iterations, `eps` 1e-4, `upsampfac` 2). Apple M1 Max, 10 cores.
+`main` at `574cfaa` (PR #21), before the leak fix of PR #22. Design P4: 4 mm, FOV 256 mm (64³), TR 40 ms, 10000 ADC samples, 1500 TRs, 128 shapes (58–62 echoes per TR). Simulated scan (an ad hoc script, before `relaxed-rosettes simulate` existed): a body blob and a marker blob, 4 coils with correlated noise, uniform 20 Hz off-resonance; recon with 2 virtual coils and the other recon defaults (8 segments, 12 B0 windows, 10 DCF iterations, 20 CG iterations, `eps` 1e-4, `upsampfac` 2). Apple M1 Max, 10 cores.
 
 **Measured, whole scan (15.0M samples):**
 
@@ -30,7 +30,7 @@ Almost all the time (97%) is in FINUFFT, and it runs at a quarter of its speed b
 | `grid` | 84 s | correlation 0.999 with the phantom; 4.6% error after a scale fit |
 | `sense` | 1058 s | correlation 1.000; 1.0% error; field map 20.17 Hz (true 20) |
 
-`sense` ran at about 190% CPU on 10 cores, with a peak footprint of 3.8 GB, of which about 1.7 GB was the h5py read leak (section 5).
+`sense` ran at about 190% CPU on 10 cores, with a peak footprint of 3.8 GB, of which about 1.7 GB was the h5py read leak (section 5, since fixed).
 
 **Measured, profile of `sense` on the first 300 TRs (3.0M samples), 213 s:**
 
@@ -51,7 +51,7 @@ The CG cost per iteration is 2 × segments × virtual coils × samples point-tra
 ## 2. Step 0: measure
 
 - Record per-stage wall time and peak memory (`resource.getrusage` peak RSS, and the footprint where available) in the `.npz` of `grid` and `sense`, and print them.
-- A benchmark: the design-A simulation (built from `main` with the commands in the README, and the phantom of `tests/conftest.py` scaled to design A), and, once it exists, the real phantom scan. Record the commit, machine, and recon config with each run.
+- A benchmark: P4 and P1, built from `main`, with `relaxed-rosettes simulate` of a fixed analytic phantom (with off-resonance, for the B0 stages), and, once it exists, the real phantom scan. Record the commit, machine, phantom, and recon config with each run. Re-measure the baseline there first: the baseline of section 1 predates the leak fix and `simulate`.
 - Acceptance for every later step: exact steps change the image by less than 1e-4 relative (NUFFT tolerance); approximate steps by less than 1% relative, with the field map within 0.5 Hz in the object, on both the simulation and the real scan.
 
 ## 3. Runtime
@@ -90,15 +90,15 @@ So: Toeplitz without off-resonance or with the few segments that section 3.2 sho
 
 ## 4. Memory
 
-- **The read leak first** (section 5): about one copy of the raw data per read pass.
+- **The read leak** (section 5): fixed in PR #22.
 - **Cache.** It stores, per selected sample, 8 B per virtual coil of data plus k (12 B), τ (4 B), and the sample index (4 B). τ follows from the sample index, and k from the TR's shape, rotation, and sample index (one 3 × 3 product per point, per batch). Keeping only the index saves 16 of the 20 B of overhead: about 1 GB at 1 mm. With plan reuse (section 3.1) the plans hold the sorted points instead.
 - **Off-resonance phase images.** `exp(2πi f tau_l)` is stored for every segment (L complex n³ images, about 1 GB at 1 mm and L = 8). Compute each on the fly.
 - **Virtual coils from the singular values.** Keep the coils that hold, e.g., 99% of the whitened data's energy (with `coils.virtual_coils` as a maximum). Every cost scales with the number kept; 6–8 instead of 12 is common for head coils.
 - **Coil maps on the coarse grid** (section 3.2), interpolated per use, if the full-grid maps (12 × n³ complex: 1.6 GB at 1 mm) are a problem.
 
-## 5. Prerequisite: the h5py read leak
+## 5. The h5py read leak (fixed)
 
-`RawData.read` and `load_rawdata` read with `.fields(...)`. In h5py 3.16 (HDF5 2.0), a read of some fields of a compound with variable-length members never frees the buffers of the variable-length fields that were not requested (`dset_rw` in `h5py/_proxy.templ.pyx` reads with the dataset's full type and reclaims only on write). Our files have two such fields, `traj` and `data`. Reading contiguous whole-record slices does not leak. This is a bug fix, on its own branch, before the real-data run; the upstream report and PR are separate and need the user's go-ahead.
+The baseline measurement found it. `RawData.read` and `load_rawdata` read with `.fields(...)`. In h5py 3.16 (HDF5 2.0), a read of some fields of a compound with variable-length members never frees the buffers of the variable-length fields that were not requested (`dset_rw` in `h5py/_proxy.templ.pyx` reads with the dataset's full type and reclaims only on write). Our files have two such fields, `traj` and `data`, so each read pass leaked about one copy of the raw data. PR #22 reads whole records instead. An upstream report and fix in h5py are separate.
 
 ## 6. Not in this plan
 
@@ -111,4 +111,4 @@ Record each step here: commit, dataset, recon config, stage times, peak memory, 
 
 | step | dataset | `grid` | `sense` | peak memory | image change | field map change |
 |---|---|---|---|---|---|---|
-| baseline (`574cfaa`) | design-A simulation, 2 virtual coils | 84 s | 1058 s | 3.8 GB (1.7 GB of it the read leak) | — | — |
+| baseline (`574cfaa`, before PR #22) | P4 simulation (ad hoc script), 2 virtual coils | 84 s | 1058 s | 3.8 GB (1.7 GB of it the read leak) | — | — |
