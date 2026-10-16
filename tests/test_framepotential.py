@@ -15,6 +15,7 @@ from relaxed_rosettes.recon.framepotential import (
     RequirementsConfig,
     Taper,
     frame_potential,
+    tau_averaging,
 )
 from relaxed_rosettes.trajectory import Trajectory
 
@@ -121,6 +122,95 @@ def test_repeating_the_same_samples_is_worse_conditioned() -> None:
     assert repeated.ratio > 1.2 * spread.ratio
 
 
+def _line_trajectory(tau_order: str, trs: int = 12) -> Trajectory:
+    """One straight shape through k = 0, along x, played with rotations about z.
+
+    ``tau_order`` sets how τ runs along the line: "out" (center early, edge
+    late), or "fixed" (every sample at one k, so each cell sees every τ).
+    """
+    samples = 16
+    k_max = 1 / (2 * RES)
+    if tau_order == "fixed":
+        k_line = np.full(samples, 0.5 * k_max)
+    else:
+        k_line = np.linspace(0, 0.95 * k_max, samples)
+    k_shape = np.zeros((1, samples, 3))
+    k_shape[0, :, 0] = k_line
+    adc_time = np.linspace(0.001, 0.04, samples)
+    angles = 2 * np.pi * np.arange(trs) / trs
+    return Trajectory(
+        k_shape_per_m=k_shape,
+        gg_shape_T2s_per_m2=np.zeros((1, samples, 3, 3)),
+        adc_time_in_tr_s=adc_time,
+        time_since_excitation_s=adc_time - 0.0005,
+        tr_index=np.arange(trs),
+        tr_start_s=0.05 * np.arange(trs, dtype=np.float64),
+        shape_index=np.zeros(trs, dtype=np.int64),
+        rotation_matrix=Rotation.from_euler("z", angles[:, None]).as_matrix(),
+        rf_phase_rad=np.zeros(trs),
+    )
+
+
+def _explicit_mismatch(requirement: Requirement, trajectory: Trajectory, size: float) -> float:
+    """The τ-averaging mismatch by direct loops over cells."""
+    n = round(FOV / RES)
+    basis = decay_basis(
+        trajectory.time_since_excitation_s,
+        requirement.r2star_min_per_s,
+        requirement.r2star_max_per_s,
+        rank=2,
+    )
+    energy = basis.singular_values[:2] ** 2
+    readout_mean = basis.functions.mean(axis=1)
+    k = trajectory.k_per_m()
+    cells: dict[tuple[int, ...], list[FloatArray]] = {}
+    for tr in range(k.shape[0]):
+        for s in range(k.shape[1]):
+            if np.linalg.norm(k[tr, s]) <= 1 / (2 * RES):
+                cell = tuple(np.clip(np.rint(k[tr, s] * FOV).astype(int) + n // 2, 0, n - 1))
+                cells.setdefault(cell, []).append(basis.functions[:, s])
+    numerator = denominator = 0.0
+    for cell, values in cells.items():
+        radius = np.linalg.norm(np.array(cell) - n // 2) / FOV
+        prior = 1 / (1 + (radius * size) ** 4)
+        difference = np.mean(values, axis=0) - readout_mean
+        numerator += prior * float(energy @ difference**2)
+        denominator += prior
+    return numerator / (denominator * float(energy @ readout_mean**2))
+
+
+def test_tau_averaging_matches_the_explicit_mismatch() -> None:
+    requirement = Requirement("static", RES)
+    trajectory = _trajectory(np.random.default_rng(3), trs=10)
+    result = tau_averaging(requirement, trajectory, FOV, object_size_m=0.1, batch_trs=3)
+    assert result.mismatch == pytest.approx(
+        _explicit_mismatch(requirement, trajectory, 0.1), rel=1e-10
+    )
+    k = trajectory.k_per_m().reshape(-1, 3)
+    assert result.samples == int(np.sum(np.linalg.norm(k, axis=1) <= 1 / (2 * RES)))
+
+
+def test_tau_averaging_is_zero_when_every_cell_sees_every_tau() -> None:
+    requirement = Requirement("static", RES)
+    fixed = tau_averaging(requirement, _line_trajectory("fixed"), FOV)
+    assert fixed.mismatch == pytest.approx(0, abs=1e-12)
+    outward = tau_averaging(requirement, _line_trajectory("out"), FOV)
+    assert outward.mismatch > 1e-3
+    # A steeper prior weights the early-τ center more, so the mismatch grows.
+    steep = tau_averaging(requirement, _line_trajectory("out"), FOV, object_size_m=1.0)
+    assert steep.mismatch > outward.mismatch
+
+
+def test_tau_averaging_needs_an_averaged_model() -> None:
+    trajectory = _line_trajectory("out")
+    for requirement in (
+        Requirement("tau", RES, tau_rank=2),
+        Requirement("time", RES, scan_time_width_s=0.1),
+    ):
+        with pytest.raises(ValueError, match="does not average"):
+            tau_averaging(requirement, trajectory, FOV)
+
+
 def test_requirements_round_trip_and_validation(tmp_path: Path) -> None:
     default = RequirementsConfig()
     assert [r.name for r in default.requirements] == [
@@ -137,10 +227,15 @@ def test_requirements_round_trip_and_validation(tmp_path: Path) -> None:
         'eps = 1e-5\n[[requirement]]\nname = "a"\nresolution_m = 0.004\ntaper = "hann"\n'
     )
     assert custom.eps == 1e-5
+    prior = RequirementsConfig.from_toml("object_size_m = 0.3\nobject_spectrum_power = 3.0\n")
+    assert (prior.object_size_m, prior.object_spectrum_power) == (0.3, 3.0)
+    assert prior.digest() != default.digest()
     assert custom.requirements == (Requirement("a", 0.004, taper=Taper.HANN),)
     assert custom.digest() != default.digest()
     bad = {
         "eps = 2.0\n": "eps",
+        "object_size_m = 0.0\n": "object_size_m",
+        "object_spectrum_power = -1.0\n": "object_spectrum_power",
         "nope = 1\n": "unknown key",
         '[[requirement]]\nname = "a"\n': "missing",
         '[[requirement]]\nname = "a"\nresolution_m = 0.004\ntaper = "box"\n': "taper must be",
@@ -187,7 +282,10 @@ def test_frame_potential_cli(
     assert names == ["coarse", "coarse_tau_time"]
     for r in report["requirements"]:
         assert r["ratio"] >= 1 and r["samples"] > 0
+    mismatch = [r["tau_averaging_mismatch"] for r in report["requirements"]]
+    assert mismatch[0] is not None and mismatch[0] >= 0 and mismatch[1] is None
     assert main(["frame-potential", seq, "-r", str(path), "--only", "coarse"]) == 0
     out = capsys.readouterr().out
     assert "coarse" in out and "coarse_tau_time" not in out
+    assert "# tau averaging" in out
     assert main(["frame-potential", seq, "-r", str(path), "--only", "nope"]) == 1
