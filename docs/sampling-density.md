@@ -90,7 +90,7 @@ Equation (2) needs $v(\rho)$, which depends on the optimized waveforms: the path
 
 ## 5. Tested and rejected: stratifying radii across shapes
 
-Rotations do not change $|k|(t)$, so the plane of $(|k|,\ \tau)$, with $\tau$ the time since excitation, is sampled only by the shapes, however many TRs are played. If each shape draws its radii independently, nothing stops many shapes from reaching similar radii in the same time slot, which could leave bands in that plane. The idea was to assign the radius quantile of tip slot $j$ of shape $s$ from a two-dimensional Kronecker lattice, $q_{s,j} = \operatorname{frac}(q_0 + s/g + j/g^2)$ with $g$ the plastic number, so every time slot sees the whole radius distribution across shapes.
+Rotations do not change $|k|(t)$, so the plane of $(|k|,\ \tau)$, with $\tau$ the time since excitation, is sampled only by the shapes, however many TRs are played. If each shape draws its radii independently, nothing stops many shapes from reaching similar radii in the same time slot, which could leave bands in that plane. The idea was to assign the radius quantile of tip slot $j$ of shape $s$ from a two-dimensional Kronecker lattice, $q_{s,j} = \mathrm{frac}(q_0 + s/g + j/g^2)$ with $g$ the plastic number, so every time slot sees the whole radius distribution across shapes.
 
 It made the $(|k|, \tau)$ sampling slightly *worse* in every case tried (section 6), and was removed. With 128 independently drawn shapes, cells later than 5 ms are already about 99% filled; the remaining empty cells are early (below), where the lattice does not help.
 
