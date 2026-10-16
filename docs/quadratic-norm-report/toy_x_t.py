@@ -13,7 +13,10 @@ components psi_j in the band. Two estimators:
 ``readout_timing`` drops the assumption that a TR is an instant: sample s of TR p
 is at time p TR + tau_s, and the image decays with tau. ``energy_tau_t`` is the
 energy over tau and T (application 1); ``lagged_cross`` the lagged correlation
-between regions (application 3).
+between regions (application 3); ``shape_library`` application 1 with a finite
+library of 1D petal shapes.
+
+Run with ``--figures DIR`` to also write the figures of ``shape_library`` to DIR.
 
 Run: python docs/quadratic-norm-report/toy_x_t.py (about a minute). Seeded.
 """
@@ -408,10 +411,174 @@ def lagged_cross() -> None:
         )
 
 
+LIB_SAMPLES = 128  # samples per TR
+LIB_TRS = 400
+LIB_RANK = 3
+LIB_SPEED = 4  # k cells per sample along a petal
+
+
+def petal_shape(rng: np.random.Generator) -> NDArray[np.int64]:
+    """The signed k cell at each tau sample: petals 0 -> tip -> 0, with centre-heavy tips."""
+    k: list[int] = []
+    while len(k) < LIB_SAMPLES:
+        tip = max(4, round((M // 2 - 1) * rng.random() ** 2))
+        out = np.arange(0, tip, LIB_SPEED)
+        petal = np.concatenate([out, tip - out]) * rng.choice([-1, 1])
+        k.extend(petal.tolist())
+    return np.array(k[:LIB_SAMPLES])
+
+
+def shape_library(figure_dir: str | None = None) -> None:
+    """Application 1 with a finite library of shapes, and the split into halves."""
+    readout_s = 0.045
+    taus = (np.arange(LIB_SAMPLES) + 0.5) * readout_s / LIB_SAMPLES
+    d_tau = readout_s / LIB_SAMPLES
+    r = np.arange(M)
+    k_cells = np.fft.fftfreq(M, 1 / M).astype(int)
+    density = (np.abs(r - M / 2) < M / 4) * (1 + 0.3 * np.cos(2 * np.pi * r / 16))
+    obj = density > 0
+    x = density[:, None] * np.exp(-(20 + 30 * r / M)[:, None] * taus)  # field corrected
+    k_space = np.fft.fft(x, axis=0, norm="ortho")  # (k cell, tau)
+    energy = LIB_TRS * d_tau * np.sum(np.abs(x) ** 2, 1)
+    u_basis, _, _ = np.linalg.svd(np.exp(-np.outer(taus, np.linspace(10, 60, 11))))
+    basis = u_basis[:, :LIB_RANK]
+
+    def solve(paths: NDArray[np.int64], y: Complex) -> tuple[Complex, NDArray[np.float64]]:
+        """For each k, a truncated least-squares fit of the tau components to its samples."""
+        components = np.zeros((M, LIB_RANK), complex)
+        condition = np.full(M, np.inf)
+        for i, cell in enumerate(k_cells):
+            rows, cols = np.nonzero(paths == cell)
+            if rows.size == 0:
+                continue
+            design = basis[cols]
+            singular = np.linalg.svd(design, compute_uv=False)
+            if singular.size == LIB_RANK and singular[-1] > 0:
+                condition[i] = singular[0] / singular[-1]
+            components[i] = np.linalg.lstsq(design, y[rows, cols], rcond=0.05)[0]
+        image: Complex = np.fft.ifft(components, axis=0, norm="ortho")
+        return image, condition
+
+    def run(shapes: int, order: str, split: str, seed: int) -> dict[str, NDArray[np.float64]]:
+        rng = np.random.default_rng(seed)
+        estimates_e, determined = [], []
+        for _ in range(8):
+            if shapes == 0:  # a new shape for every TR
+                paths = np.array([petal_shape(rng) for _ in range(LIB_TRS)])
+            else:
+                library = [petal_shape(rng) for _ in range(shapes)]
+                if order == "random":
+                    index = rng.integers(shapes, size=LIB_TRS)
+                else:
+                    index = np.arange(LIB_TRS) % shapes
+                paths = np.array([library[i] for i in index])
+            paths = paths * rng.choice([-1, 1], size=(LIB_TRS, 1))  # the 1D "rotation"
+            white = rng.standard_normal(paths.shape) + 1j * rng.standard_normal(paths.shape)
+            y = k_space[np.mod(paths, M), np.arange(LIB_SAMPLES)[None]] + 0.05 * white / np.sqrt(2)
+            if split == "parity":
+                half = np.arange(LIB_TRS) % 2
+            else:  # whole cycles of the shapes
+                half = (np.arange(LIB_TRS) // max(shapes, 1)) % 2
+            images = []
+            for h in (0, 1):
+                masked = np.where((half == h)[:, None], paths, M * 10)
+                image, condition = solve(masked, y)
+                images.append(image)
+                determined.append(np.mean(condition < 1e3))
+            cross = np.real(images[0].conj() * images[1])
+            estimates_e.append(LIB_TRS * d_tau * np.sum(cross, 1))
+        e = np.array(estimates_e)
+        error = np.sqrt(np.mean((e[:, obj] - energy[obj]) ** 2)) / np.sqrt(
+            np.mean(energy[obj] ** 2)
+        )
+        return {
+            "mean": e.mean(0),
+            "ratio": np.array(e.mean(0)[obj].sum() / energy[obj].sum()),
+            "error": np.array(error),
+            "determined": np.array(np.mean(determined)),
+        }
+
+    cases = [(n, f"{n} shapes" if n > 1 else "1 shape") for n in (1, 2, 4, 8, 32)]
+    cases.append((0, "a new shape every TR"))
+    print(f"\nShape library: {LIB_TRS} TRs of {LIB_SAMPLES} samples, tau rank {LIB_RANK}")
+    print("library                 k determined   energy, total / true   error (RMS)")
+    results = {}
+    for shapes, label in cases:
+        res = run(shapes, "random", "parity", seed=11)
+        results[label] = res
+        print(
+            f"{label:22s}  {float(res['determined']):10.2f}     {float(res['ratio']):10.3f}"
+            f"            {float(res['error']):.3f}"
+        )
+    splits = {
+        "8 shapes cycled, odd/even TRs": run(8, "cycled", "parity", seed=12),
+        "8 shapes cycled, whole cycles": run(8, "cycled", "cycle", seed=12),
+    }
+    for label, res in splits.items():
+        print(
+            f"{label:30s}  {float(res['determined']):.2f}     {float(res['ratio']):.3f}"
+            f"     {float(res['error']):.3f}"
+        )
+    if figure_dir is None:
+        return
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rng = np.random.default_rng(13)
+    fig, axes = plt.subplots(2, 3, figsize=(10, 6.2), constrained_layout=True)
+    for ax, shapes in zip(axes[0], (2, 8, 32), strict=True):
+        library = [petal_shape(rng) for _ in range(shapes)]
+        for path in library:
+            for sign in (-1, 1):
+                ax.plot(taus * 1e3, sign * path, ".", ms=1.5, color="0.2")
+        ax.set_title(f"{shapes} shapes: samples in (τ, k)")
+        ax.set_xlabel("τ (ms)")
+        ax.set_ylabel("k (cells)")
+        ax.set_ylim(-M // 2, M // 2)
+    labels = [label for _, label in cases]
+    determined = [float(results[label]["determined"]) for label in labels]
+    errors = [float(results[label]["error"]) for label in labels]
+    ticks = ["1", "2", "4", "8", "32", "new\nevery TR"]
+    axes[1, 0].bar(ticks, determined, color="0.4")
+    axes[1, 0].set_ylabel("fraction of k with all τ\ncomponents determined")
+    axes[1, 0].set_xlabel("shapes in the library")
+    axes[1, 1].bar(ticks, errors, color="0.4")
+    axes[1, 1].set_ylabel("energy image, RMS error / RMS")
+    axes[1, 1].set_xlabel("shapes in the library")
+    ax = axes[1, 2]
+    ax.plot(r, energy, "k-", lw=2, label="truth")
+    for label, style in (("1 shape", "--"), ("4 shapes", "-."), ("32 shapes", ":")):
+        ax.plot(r, results[label]["mean"], style, label=label)
+    ax.set_xlabel("x (cells)")
+    ax.set_ylabel("energy over τ and T")
+    ax.set_title("energy image, mean of trials")
+    ax.legend(fontsize=8)
+    fig.savefig(f"{figure_dir}/shape-library.png", dpi=120, metadata={"Software": None})
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(6, 3.6), constrained_layout=True)
+    ax.axhline(0, color="k", lw=1)
+    for label, style in zip(splits, ("--", "-"), strict=True):
+        ax.plot(r, splits[label]["mean"] - energy, style, label=label)
+    ax.set_xlabel("x (cells)")
+    ax.set_ylabel("energy: estimate − truth")
+    ax.set_title("8 shapes in a fixed cycle: how to split the TRs")
+    ax.legend(fontsize=8)
+    fig.savefig(f"{figure_dir}/split-and-cycle.png", dpi=120, metadata={"Software": None})
+    plt.close(fig)
+
+
 if __name__ == "__main__":
+    import sys
+
+    figures = sys.argv[sys.argv.index("--figures") + 1] if "--figures" in sys.argv else None
     scaling()
     object_cases()
     leakage_spectrum()
     readout_timing()
     energy_tau_t()
     lagged_cross()
+    shape_library(figures)
