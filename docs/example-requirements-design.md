@@ -266,6 +266,24 @@ The scan-time basis of [basis-quality-test-plan.md](basis-quality-test-plan.md) 
 8. **Spoiling of a schedule.** Tests section 5.1: does a schedule optimized for coverage spoil as well as incoherent spoiling does?
    - Setup: schedules from the shuffle, greedy coverage, greedy with the spoiling term, and roles; RF phase random and quadratic 117°. (a) Pathway analysis: the distribution of $\lvert M \rvert$ of the low-order pathways, and how often and with what amplitude they fall within the readout ball. (b) Simulation: the analytic phantom (section 7.1) gives the object's spectrum at any $k$, so the spurious signal of each pathway, its amplitude times the phantom signal at $M + k_q(t)$, can be added to a simulated scan exactly; reconstruct and measure the artefact, the steady-state fluctuation over T, and its spectrum in the BOLD band. An isochromat (Bloch) simulation of one voxel checks the pathway truncation.
    - Decision: whether the spoiling term (or constraint) is needed, the spoil moment size, and the RF phase scheme.
+   - **Measured, 8(a), 2026-10-15** (`relaxed-rosettes spoiling`, the 3D phase graph of `relaxed_rosettes.spoiling`; designs P4 and P1 of [basis-quality-test-plan.md](basis-quality-test-plan.md), 1500 TRs and 100 dummies; grey matter T1 1.5 s, T2 90 ms, D 0.8 µm²/ms, and CSF 4 s, 1.5 s, 3 µm²/ms; threshold 1e-5). "Near": coherences whose closest approach to a TR's samples is within 3 cells, summed, relative to the TR's FID; energy: spurious over expected signal energy of a TR for the default phantom (32 strongest near coherences). "Random": independent random rotations, the incoherent-spoiling reference. CSF reached the 200 000-state cap (its smallest pathways are dropped).
+
+     | design | rotations | tissue | near: mean | 99th percentile | max | TRs > 10% | energy: max |
+     |---|---|---|---|---|---|---|---|
+     | P4 | schedule | grey matter | 0.67% | 2.6% | 42% | 0.27% | 2.5e-3 |
+     | P4 | random | grey matter | 0.91% | 4.0% | 43% | 0.73% | 1.0e-2 |
+     | P4 | schedule | CSF | 4.2% | 12% | 101% | 2.2% | 1.3e-2 |
+     | P4 | random | CSF | 5.2% | 19% | 108% | 7.1% | 5.4e-2 |
+     | P1 | schedule | grey matter | 0.04% | 0.7% | 1.9% | 0% | 2.3e-6 |
+     | P1 | random | grey matter | 0.05% | 0.9% | 2.1% | 0% | 2.5e-5 |
+     | P1 | schedule | CSF | 0.25% | 2.6% | 23% | 0.07% | 2.7e-4 |
+     | P1 | random | CSF | 0.25% | 2.7% | 6% | 0% | 1.9e-4 |
+
+     1. Both scan designs spoil as well as independent random spoiler directions (P4 somewhat better); no change is needed before the scan. The schedule's consecutive spoiler directions are statistically like random ones (mean dot product −0.01, standard deviation 0.57).
+     2. The rare large events are two-TR transverse chains: in P4's four worst TRs (of 1500), the two preceding spoilers were within about 6° of antiparallel (dot product below −0.99). A schedule rule against nearly antiparallel consecutive spoilers would remove them.
+     3. P1 is much safer than P4: its spoiler is 640 cells long against 160, and one TR's readout passes near about 2% of its k-space ball against about 40% for P4, so a returned coherence is rarely sampled.
+     4. Stored (stimulated) pathways carry most of the mean; transverse chains cause the maxima.
+     5. The RF phase scheme cannot be judged this way: without interference, a pathway's magnitude does not depend on the RF phases, and random and quadratic 117° gave the same numbers. It needs 8(b).
 
 **Order.** Experiment 1 first, because 2, 4 and 5 optimize the frame potential. Experiments 2 and 3 are cheap and independent and can run beside 1. Experiment 4 needs only the evaluator; 5–7 need the τ basis and the phantom. Experiment 8(a) needs only the schedules, so it can run with experiment 4; 8(b) needs the phantom and the pathway simulation. If 1–5 leave a gap, alternate shapes and schedule (section 6).
 
