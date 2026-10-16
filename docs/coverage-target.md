@@ -178,3 +178,4 @@ A field is a number (fixed), `"averaged"`, or `"best"`. A whole-scan width is `"
 - The target gap that defines "covered", and whether the 95th percentile is the right tail.
 - How to measure $R(\text{res})$, and whether it can be predicted from the coil geometry.
 - Whether the front needs a separate scale for each requirement, or whether one scale and the priorities are enough.
+- A fourth kind of dimension: **collapsed by a quadratic form** (the power in a band over T, or the coherence between voxels), estimated without a model of the dimension. Its coverage conditions differ from an average's: the coverage of one TR, and no power of the k–T spectrum in the band ([quadratic-norm-report.md](quadratic-norm-report.md), section 6).
