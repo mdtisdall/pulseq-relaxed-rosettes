@@ -266,12 +266,18 @@ def _cmd_export_trajectory(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    delays = ""
+    if args.gradient_delays_s is not None and any(args.gradient_delays_s):
+        # Verified nominal above; the delays are a correction on top of it.
+        trajectory = make_trajectory(config, schedule, shapes, args.gradient_delays_s)
+        delays = "; with gradient delays " + ",".join(f"{d:g}" for d in args.gradient_delays_s)
+        delays += " s"
     save_trajectory(args.output, config, trajectory)
     print(
         f"wrote {args.output}: {len(trajectory.tr_index)} TRs x "
         f"{len(trajectory.adc_time_in_tr_s)} samples; matches pypulseq's k-space of "
         f"{args.seq} within {error:.1e} k-space pixels over "
-        f"{min(args.verify_trs, len(trajectory.tr_index))} TRs"
+        f"{min(args.verify_trs, len(trajectory.tr_index))} TRs{delays}"
     )
     return 0
 
@@ -343,6 +349,7 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
         from relaxed_rosettes.recon.rawdata import (
             PHANTOM_DIGEST,
             PHANTOM_TOML,
+            SIMULATED_GRADIENT_DELAYS,
             write_simulated_ismrmrd,
         )
     except ImportError as e:
@@ -352,20 +359,28 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
     _, config, schedule, shapes = _load_seq_and_design(args.seq)
     signature = read_seq_signature(args.seq)
     trajectory = make_trajectory(config, schedule, shapes)
+    extra = {PHANTOM_TOML: phantom.to_toml(), PHANTOM_DIGEST: phantom.digest()}
+    played = trajectory
+    delays = ""
+    if args.gradient_delays_s is not None and any(args.gradient_delays_s):
+        # The signal follows the delayed gradients; the embedded trajectory stays nominal.
+        played = make_trajectory(config, schedule, shapes, args.gradient_delays_s)
+        extra[SIMULATED_GRADIENT_DELAYS] = ",".join(repr(d) for d in args.gradient_delays_s)
+        delays = f", gradient delays {extra[SIMULATED_GRADIENT_DELAYS]} s"
     coils = write_simulated_ismrmrd(
         args.output,
         config,
         trajectory,
         signature,
-        simulate_trs(phantom, trajectory, batch_trs=args.batch_trs),
+        simulate_trs(phantom, played, batch_trs=args.batch_trs),
         simulate_noise(phantom, config.readout.adc_num_samples),
-        extra_strings={PHANTOM_TOML: phantom.to_toml(), PHANTOM_DIGEST: phantom.digest()},
+        extra_strings=extra,
         embed_trajectory=not args.no_trajectory,
     )
     print(
         f"wrote {args.output}: {len(trajectory.tr_index)} TRs, {coils} coils, "
         f"{phantom.noise_readouts} noise readouts (config {config.digest()}, "
-        f"phantom {phantom.digest()}, signature {signature})"
+        f"phantom {phantom.digest()}, signature {signature}){delays}"
     )
     return 0
 
@@ -502,6 +517,37 @@ def _cmd_sense(args: argparse.Namespace) -> int:
         f"(recon config {recon.digest()})"
     )
     return 0
+
+
+def _cmd_delays(args: argparse.Namespace) -> int:
+    try:
+        from relaxed_rosettes.recon.delays import estimate_delays, format_delays, save_delays
+        from relaxed_rosettes.recon.rawdata import load_rawdata
+    except ImportError as e:
+        print(f"error: delays needs the recon extra ({e})", file=sys.stderr)
+        return 1
+    raw = load_rawdata(args.raw)
+    design, trajectory = load_trajectory(args.trajectory)
+    estimate = estimate_delays(
+        raw,
+        design,
+        trajectory,
+        max_shift_s=args.max_shift_s,
+        max_crossing_distance_cells=args.max_crossing_distance_cells,
+    )
+    save_delays(args.output, estimate, raw)
+    print(f"wrote {args.output}\n{format_delays(estimate)}")
+    return 0
+
+
+def _parse_delays(text: str) -> list[float]:
+    try:
+        values = [float(v) for v in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a comma-separated list") from None
+    if len(values) != 3:
+        raise argparse.ArgumentTypeError(f"{text!r}: need 3 delays (x, y, z)")
+    return values
 
 
 def _parse_floats(text: str) -> list[float]:
@@ -656,6 +702,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="acquired TRs to check against pypulseq's k-space (default: 2)",
     )
+    export.add_argument(
+        "--gradient-delays-s",
+        type=_parse_delays,
+        metavar="DX,DY,DZ",
+        help="delay of each physical gradient axis (s), e.g. from `relaxed-rosettes delays`",
+    )
     export.set_defaults(func=_cmd_export_trajectory)
 
     recon_config = commands.add_parser("recon-config", help="write or show a recon config")
@@ -699,6 +751,31 @@ def build_parser() -> argparse.ArgumentParser:
     sense.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
     sense.add_argument("--coil-maps", action="store_true", help="also store the coil maps")
     sense.set_defaults(func=_cmd_sense)
+
+    delays = commands.add_parser(
+        "delays",
+        help="estimate gradient delays from the echoes of the k = 0 crossings (recon extra)",
+    )
+    delays.add_argument("raw", type=Path, help="ISMRMRD file from `relaxed-rosettes to-ismrmrd`")
+    delays.add_argument(
+        "trajectory",
+        type=Path,
+        help="nominal trajectory .npz from `relaxed-rosettes export-traj` (no delays)",
+    )
+    delays.add_argument("-o", "--output", type=Path, required=True, help="output .npz file")
+    delays.add_argument(
+        "--max-shift-s",
+        type=float,
+        default=20e-6,
+        help="largest echo shift searched for (s; default: 2e-05)",
+    )
+    delays.add_argument(
+        "--max-crossing-distance-cells",
+        type=float,
+        default=1.0,
+        help="use crossings that pass within this distance of k = 0 (cells; default: 1)",
+    )
+    delays.set_defaults(func=_cmd_delays)
 
     to_ismrmrd = commands.add_parser(
         "to-ismrmrd",
@@ -764,6 +841,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-trajectory",
         action="store_true",
         help="do not store the k-space trajectory in each acquisition",
+    )
+    simulate.add_argument(
+        "--gradient-delays-s",
+        type=_parse_delays,
+        metavar="DX,DY,DZ",
+        help="simulate a delay on each physical gradient axis (s); the stored trajectory "
+        "stays nominal",
     )
     simulate.set_defaults(func=_cmd_simulate)
 

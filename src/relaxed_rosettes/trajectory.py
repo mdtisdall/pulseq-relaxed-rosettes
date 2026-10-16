@@ -15,12 +15,22 @@ the gradient outer product, ``gg(t) = ∫ g gᵀ dt`` (3 × 3, symmetric), of ea
 shape at the ADC samples. The lowest-order concomitant field is quadratic in
 the gradient, so in a TR with rotation ``R`` its phase at every position
 follows from ``R @ gg @ Rᵀ`` (``concomitant_phase_rad``).
+
+Gradient delays. A delay ``δ_i`` on physical axis ``i`` plays that axis's
+gradient late: ``g_i(t) = g_nominal_i(t - δ_i)``, so ``k_i(t) =
+k_nominal_i(t - δ_i)``. With delays, the trajectory also stores k of each
+shape at the ADC times shifted by each axis's delay (``k_shape_delayed_per_m``),
+and ``k_per_m`` takes physical component ``i`` from the shape's k at
+``t - δ_i``. This is exact for the piecewise-linear waveform. ``gg`` stays
+nominal: a delay changes the concomitant phase only to second order.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pypulseq as pp
@@ -139,6 +149,15 @@ class Trajectory:
     """(acquired TRs, 3, 3): physical k = R @ logical k."""
     rf_phase_rad: FloatArray
     """(acquired TRs,): RF and ADC phase of each acquired TR."""
+    gradient_delay_s: FloatArray = field(default_factory=lambda: np.zeros(3))
+    """(3,): delay of each physical gradient axis (x, y, z); zeros for the nominal trajectory."""
+    k_shape_delayed_per_m: FloatArray | None = None
+    """(3, shapes, samples, 3): k of each shape at the ADC times minus the delay
+    of physical axis 0, 1, 2; None without delays."""
+
+    @property
+    def has_delays(self) -> bool:
+        return self.k_shape_delayed_per_m is not None
 
     def k_per_m(self, trs: slice | NDArray[np.int64] | None = None) -> FloatArray:
         """(TRs, samples, 3) physical k of the acquired TRs (default: all).
@@ -147,8 +166,14 @@ class Trajectory:
         slice or index array for fewer.
         """
         selection = slice(None) if trs is None else trs
+        rotation = self.rotation_matrix[selection]
+        if self.k_shape_delayed_per_m is not None:
+            # Physical component i is R[i] @ k_shape(t - δ_i).
+            k_axes = self.k_shape_delayed_per_m[:, self.shape_index[selection]]
+            delayed: FloatArray = np.einsum("tij,itsj->tsi", rotation, k_axes)
+            return delayed
         k_logical = self.k_shape_per_m[self.shape_index[selection]]
-        k: FloatArray = np.einsum("tij,tsj->tsi", self.rotation_matrix[selection], k_logical)
+        k: FloatArray = np.einsum("tij,tsj->tsi", rotation, k_logical)
         return k
 
     def gg_T2s_per_m2(self, trs: slice | NDArray[np.int64] | None = None) -> FloatArray:
@@ -166,17 +191,31 @@ class Trajectory:
         return gg
 
 
-def make_trajectory(config: Config, schedule: Schedule, shapes: list[Shape]) -> Trajectory:
-    """Trajectory of a design."""
+def make_trajectory(
+    config: Config,
+    schedule: Schedule,
+    shapes: list[Shape],
+    gradient_delay_s: Sequence[float] | None = None,
+) -> Trajectory:
+    """Trajectory of a design, optionally with a delay on each physical gradient axis."""
     r = config.readout
+    raster = config.system.grad_raster_time_s
     adc_time = np.asarray(
         config.adc_start_s + (np.arange(r.adc_num_samples) + 0.5) * r.adc_dwell_s,
         dtype=np.float64,
     )
-    k_shape = np.stack(
-        [kspace_at_times(s.g_mT_per_m, config.system.grad_raster_time_s, adc_time) for s in shapes]
-    )
-    raster = config.system.grad_raster_time_s
+    k_shape = np.stack([kspace_at_times(s.g_mT_per_m, raster, adc_time) for s in shapes])
+    delays = np.zeros(3) if gradient_delay_s is None else np.asarray(gradient_delay_s, np.float64)
+    if delays.shape != (3,):
+        raise ValueError("gradient_delay_s needs one delay for each of the 3 physical axes")
+    k_delayed = None
+    if np.any(delays != 0):
+        k_delayed = np.stack(
+            [
+                np.stack([kspace_at_times(s.g_mT_per_m, raster, adc_time - d) for s in shapes])
+                for d in delays
+            ]
+        )
     gg_shape = np.stack(
         [gradient_outer_integral_at_times(s.g_mT_per_m, raster, adc_time) for s in shapes]
     )
@@ -191,6 +230,8 @@ def make_trajectory(config: Config, schedule: Schedule, shapes: list[Shape]) -> 
         shape_index=schedule.shape_index[acquired],
         rotation_matrix=schedule.rotation_matrix[acquired],
         rf_phase_rad=schedule.rf_phase_rad[acquired],
+        gradient_delay_s=delays,
+        k_shape_delayed_per_m=k_delayed,
     )
 
 
@@ -198,13 +239,19 @@ def save_trajectory(path: Path, config: Config, trajectory: Trajectory) -> None:
     """Write a trajectory and its config to an ``.npz`` file.
 
     The arrays are the ``Trajectory`` fields, plus ``config_toml`` and
-    ``config_digest``. The physical k of sample ``s`` of acquired TR ``a`` is
-    ``rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]``, and its
-    physical ``∫ g gᵀ dt`` is ``R @ gg_shape_T2s_per_m2[shape_index[a], s] @ Rᵀ``
+    ``config_digest``. Without gradient delays, the physical k of sample ``s``
+    of acquired TR ``a`` is ``rotation_matrix[a] @ k_shape_per_m[shape_index[a], s]``;
+    with them (``gradient_delay_s`` not zero), its component ``i`` is
+    ``rotation_matrix[a][i] @ k_shape_delayed_per_m[i, shape_index[a], s]``.
+    Its physical ``∫ g gᵀ dt`` is ``R @ gg_shape_T2s_per_m2[shape_index[a], s] @ Rᵀ``
     with ``R = rotation_matrix[a]``.
     """
+    delayed: dict[str, Any] = {}
+    if trajectory.k_shape_delayed_per_m is not None:
+        delayed["k_shape_delayed_per_m"] = trajectory.k_shape_delayed_per_m
     np.savez(
         path,
+        **delayed,
         k_shape_per_m=trajectory.k_shape_per_m,
         gg_shape_T2s_per_m2=trajectory.gg_shape_T2s_per_m2,
         adc_time_in_tr_s=trajectory.adc_time_in_tr_s,
@@ -214,13 +261,14 @@ def save_trajectory(path: Path, config: Config, trajectory: Trajectory) -> None:
         shape_index=trajectory.shape_index,
         rotation_matrix=trajectory.rotation_matrix,
         rf_phase_rad=trajectory.rf_phase_rad,
+        gradient_delay_s=trajectory.gradient_delay_s,
         config_toml=config.to_toml(),
         config_digest=config.digest(),
     )
 
 
 def load_trajectory(path: Path) -> tuple[Config, Trajectory]:
-    """Read a file written by ``save_trajectory``."""
+    """Read a file written by ``save_trajectory`` (one without delays if it predates them)."""
     with np.load(path) as data:
         config = Config.from_toml(str(data["config_toml"]))
         if str(data["config_digest"]) != config.digest():
@@ -235,6 +283,12 @@ def load_trajectory(path: Path) -> tuple[Config, Trajectory]:
             shape_index=data["shape_index"],
             rotation_matrix=data["rotation_matrix"],
             rf_phase_rad=data["rf_phase_rad"],
+            gradient_delay_s=(
+                data["gradient_delay_s"] if "gradient_delay_s" in data else np.zeros(3)
+            ),
+            k_shape_delayed_per_m=(
+                data["k_shape_delayed_per_m"] if "k_shape_delayed_per_m" in data else None
+            ),
         )
     return config, trajectory
 
