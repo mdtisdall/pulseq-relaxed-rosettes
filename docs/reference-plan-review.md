@@ -111,8 +111,62 @@ Status values: `open`, `decided`, `applied`, `dropped`.
 
 - **Problem.** The framework defines the design as "the parameters of the joint distribution of the sample coordinates", and several results need independence across groups of samples. A real design is one deterministic set of samples (from a seed). The expected loss in the framework averages over the priors and the noise only.
 - **Proposed fix.** State, in §1 and in the framework, whether a result is for a **random design** (expectations include the randomness of the design) or for a **fixed design** (conditional on one realization), and how the empirical distribution of a fixed design relates to the distribution that the results use.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** fixed terms, each with one meaning, used throughout the reference and nowhere with another meaning. They go into `notation.md` (D1) as glossary entries, with the terms of A1.
+
+  **What is chosen:**
+
+  | term | meaning | 5D example | toy |
+  |---|---|---|---|
+  | **sampling pattern** | one concrete set of sample coordinates, with the coordinates of each sample; deterministic; what is actually measured | the trajectory of one `.seq` file: its shapes, rotations and schedule, realized from one seed | the coordinates of one simulated measurement |
+  | **pattern generator** | a procedure that generates sampling patterns, possibly at random | the generator of the library, the rotations and the schedule, before a seed is fixed | the rule from which each trial's pattern is drawn |
+  | **design variables** | the parameters of a pattern generator | the number of shapes, the target density, the spoil moment, the rule of the schedule | the number of shapes, the density of tips, the rule of the schedule |
+  | **seed** | what selects one pattern from a pattern generator | the seed in `Config` | the seed of each trial |
+
+  A deterministic pattern generator produces one pattern, and the distinction disappears for it. "Pattern generator" is always written in full: a bare "generator" would be confused with the data-generating model (A1) and with `np.random.Generator`. "Design" alone is used only for the activity (experimental design), never for one of these objects.
+
+  **The distributions of the coordinates:**
+
+  | term | meaning |
+  |---|---|
+  | **pattern distribution** | the empirical distribution of the coordinates within one sampling pattern; defined for any pattern |
+  | **pattern-generator distribution** | the distribution over sampling patterns that a pattern generator produces. Independence across repetitions is a property of it |
+
+  These replace "the joint distribution of the sample coordinates" of the plan.
+
+  **Expected loss:**
+
+  | term | averaged over | conditional on |
+  |---|---|---|
+  | **expected loss of a pattern** | the noise, and the priors of the data-generating model | the sampling pattern |
+  | **expected loss of a pattern generator** | the same, and the pattern-generator distribution | the design variables |
+
+  The expected loss of a pattern generator is the average of the expected loss of its patterns.
+
+  The expected loss of a pattern generator averages over two distributions: the data-generating model's, which is assumed, and the pattern generator's, which is chosen and known exactly. The pattern generator is therefore not called a model: it approximates nothing, and has no modelling error of its own. The difference between the nominal and the measured trajectory (the gradient impulse response) is modelling error of the operator (A1).
+
+  **Kinds of result:**
+
+  | term | meaning |
+  |---|---|
+  | **pattern result** | holds for a given sampling pattern. For a linear estimator (A2), its bias and variance can be computed exactly for that pattern; the frame potential and the errors of experiment 1a are pattern quantities |
+  | **generator result** | holds on average over a pattern generator; for example, leakage is white over temporal frequency when the patterns of the repetitions are drawn independently, and products between independent sets are unbiased |
+
+  A generator result applied to one sampling pattern is an approximation. Each result states its kind; the size of the gap for a given pattern is a question for verification.
+
+  **Related terms:**
+
+  - **repetition:** a group of samples measured together; the unit across which independence is stated (one TR in the 5D example);
+  - **split:** the division of the repetitions of a sampling pattern into sets, for the product estimators. A split is part of the estimator, not of the pattern;
+  - **pressures and conditions** each state whether they concern a sampling pattern or a pattern generator. A condition is a property of the pair (sampling pattern, estimator) or (pattern generator, estimator) (A4).
+
+  **Changes to the plan:**
+
+  - The framework: "design variables" are the parameters of a pattern generator; the expected loss is defined in its two forms.
+  - §1: "the coordinate distribution" is replaced by the pattern distribution and the pattern-generator distribution; "repetition" is defined.
+  - §3: each pressure and condition states its kind (pattern or generator); "the change of the expected loss with the coordinate distribution" names which distribution.
+  - §4: each example states its pattern generator, its design variables, and how its sampling patterns are drawn.
+  - Elsewhere, "design" as a noun for a pattern or a generator is replaced by the term above.
 
 ### A4. "Invalid" in the definition of a condition is undefined
 
