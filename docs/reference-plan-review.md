@@ -172,8 +172,21 @@ Status values: `open`, `decided`, `applied`, `dropped`.
 
 - **Problem.** §3 defines a condition as one where, if it fails, "the estimator is invalid", without saying what invalid means. Its example, "each set to hold the whole structure that the representation needs", is vague.
 - **Proposed fix.** Define invalid: the unknown is not identifiable from the design, or an assumption of the estimator's derivation fails (for example, independence between sets). Rewrite the example as "each set must determine the representation on its own".
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** a condition is a yes-or-no property of one of two kinds. With the scope of A2 and the terms of A1 and A3:
+
+  1. **Estimability.** The output must be estimable from the data, under the reconstruction model. For a linear model, a linear function of the coefficients is **estimable** if it lies in the row space of the model's operator (the operator applied to the representation): some linear function of the data has it as its expectation (Scheffé, *The Analysis of Variance*, 1959; Searle, *Linear Models*, 1971). If the output is not estimable, no estimator in the scope recovers it; with regularization, the estimate is set by the regularization prior, not by the data. Estimability is a pattern result: for a linear model, it can be checked exactly for a given sampling pattern.
+  2. **A property that the estimator is built to have.** Some estimators are defined by a property that holds only under an assumption: for example, products between independent sets are unbiased only if the errors of the sets are independent. If the assumption fails, the estimator loses the property it exists for, and the bias that it was built to remove returns. These conditions are usually generator results.
+
+  **Conditions and pressures.** The failure of a condition is binary: the output is estimable or not; the property holds or not. Nearness to failure is a pressure: an output that is barely estimable is badly conditioned, and its variance is large, which is measured continuously. So the τ-averaging mismatch of experiment 1a is a pressure, not a condition: the average was estimable, with a large propagated modelling error.
+
+  **The example of §3, rewritten:** "For the product estimators: (a) the output must be estimable from each set of the split on its own, under the reconstruction model; (b) the errors of the sets must be independent, which needs their sampling patterns drawn independently by the pattern generator, and a split that does not align with any periodicity of the pattern generator."
+
+  **Changes to the plan:**
+
+  - §3: the definition of a condition, its two kinds, and the rule that failure is binary and nearness to failure is a pressure;
+  - §3: the rewritten example;
+  - bibliography: entries for estimability (Scheffé, 1959; Searle, 1971), with their notation mapped to the series'. The citations (editions, pages) are checked when the entries are written.
 
 ## D. The linking structure
 
