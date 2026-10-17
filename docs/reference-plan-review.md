@@ -227,10 +227,39 @@ Status values: `open`, `decided`, `applied`, `dropped`.
   - **The README is the entry point**, and the lasting content of the plan (conventions, reading order) moves into it (C5).
 
   Consequences: §5 and §6 of the plan change to this structure; checking anchors in `scripts/check_links.py` becomes optional, and would be a separate change on its own branch.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** the proposed structure, started lighter, following the abstraction test of A2:
+
+  ```
+  docs/reference/
+    README.md        entry point: purpose and scope (linear estimators, A2),
+                     reading order, the chapters with one-line summaries,
+                     conventions, links to the files below
+    notation.md      the glossary (the terms of A1, A3 and A4) and the table
+                     of symbols; each row links to the chapter that defines it
+    examples/
+      toy-x-t.md     the toy: data-generating model, pattern generator, noise;
+                     and its code
+      rosette-5d.md  the 5D problem, with its glossary of output names (C4)
+    sources/
+      README.md      index of sources
+      <key>.md       one file for each source: citation and DOI, what is used
+                     and where, assumptions, notation map, status, the chapters
+                     that use it
+    00-problem.md …  the chapters, each with a short header (a list, not YAML):
+                     depends on (chapters), defines (terms and symbols, linked
+                     to notation.md), sources (files)
+  ```
+
+  - **Deferred:** the results index (`results.md`) and stable result IDs, until the first chapter has results to index. The README states the convention for IDs, so that it is ready.
+  - **The location** is `docs/reference/`; this settles open decision 5 of the plan.
+  - **Unchanged from the proposal:** one file for each source (links checked by `scripts/check_links.py`; chapters written in parallel do not conflict; an agent loads one source alone); the examples in their own files; the notation in one registry; the README as the entry point for people and agents, which takes the lasting content of the plan (C5).
+
+  **Changes to the plan:** §5 (one bibliography document with anchors) and §6 (the documents) change to this structure; open decision 5 is removed; checking anchors in `scripts/check_links.py` is not needed.
 
 ## B. Inconsistencies and errors
+
+B1–B4 concern the details of the examples. Those details belong to the documents that define the examples (`examples/toy-x-t.md` and `examples/rosette-5d.md`, D1), and are refined when they are written. The plan keeps its §4 only as a rough draft of them, marked as such; B1–B4 are kept here as drafting notes for those documents, not as fixes to the plan. Change to the plan: §4 is marked "rough draft: the examples are defined, and refined, in `docs/reference/examples/`".
 
 ### B1. The 5D measurement formula leaves out the unknowns that §4.2 lists
 
@@ -238,43 +267,119 @@ Status values: `open`, `decided`, `applied`, `dropped`.
 - **Proposed fix.** Write the formula with both, for example
 
   $$y_{m,v} = \int s_v(r)\, x(r, \tau_m, T_m)\, e^{-2\pi i\, (k_m \cdot r \,+\, \Delta f(r, T_m)\, \tau_m)}\, dr \;+\; n_{m,v} .$$
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** deferred to the examples (2026-10-16). Drafting note for `examples/rosette-5d.md`: write the measurement with the coil sensitivity and the field phase, for example $y_{m,v} = \int s_v(r)\, x(r, \tau_m, T_m)\, e^{-2\pi i\, (k_m \cdot r + \Delta f(r, T_m)\, \tau_m)}\, dr + n_{m,v}$.
 
 ### B2. The toy lacks two elements that §4 requires of each example
 
 - **Problem.** §4 says that each example states the unknown parameters of its operator and its noise. §4.1 has neither bullet. The phase drift of the running example could be an unknown of the signal or of the operator.
 - **Proposed fix.** Add both bullets to §4.1, and decide where the phase drift belongs.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** deferred to the examples (2026-10-16). Drafting note for `examples/toy-x-t.md`: state the unknowns of the operator and the noise. A candidate: the phase drift of the running example as an unknown of the operator (a phase that multiplies the signal), so that the toy has an instance of modelling error of the operator (A1) and of a nonlinear unknown.
 
 ### B3. The toy's design variables are the rosette's
 
 - **Problem.** §4.1 states the toy's design as "petals and their tips" and "the sign of k as the rotation": the structure of the application, against the rule of §4 that the toy holds only what illustrates a mechanism.
 - **Proposed fix.** State the toy's design as a parameterization of the distribution of its (k, t) coordinates, with petals as one instance of it.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** deferred to the examples (2026-10-16). Drafting note for `examples/toy-x-t.md`: state the toy's design as a pattern generator over the (k, t) coordinates (A3), whose design variables set the pattern-generator distribution; petals are one instance of it.
 
 ### B4. The 5D example makes a design statement
 
 - **Problem.** §4.2: "which make a rank-L representation over τ a natural choice here" chooses a representation, against "the examples do not make design decisions" (§7).
 - **Proposed fix.** State the signal effects, and which representations can represent them, without choosing one.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** deferred to the examples (2026-10-16). Drafting note for `examples/rosette-5d.md`: state the signal effects and which representations can represent them (for example, a fixed rank-L basis over τ, and the modelling error of a lower rank), without choosing one.
 
 ### B5. The order of the template's items
 
 - **Problem.** Template item 2 (§7) names the nuisance parameters "for the outputs it chooses", but the outputs are chosen only in item 10.
 - **Proposed fix.** Choose the outputs at item 2 and use them at item 10; or move the nuisance parameters into item 10.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** the nuisance parameters split into two kinds, and each goes to a different item of the template.
+
+  **Within the cell's dimension.** The output usually asks for less than the representation holds: for example, the representation holds a mean and a fluctuation around it, and the output is the mean, so the fluctuation is a nuisance parameter. This is intrinsic to the cell, not to an example, and the three ways to handle it are the grid's own choices:
+
+  | handling of the part not asked for | what the cell does | in the grid |
+  |---|---|---|
+  | estimate it, then discard it | represent the mean and the fluctuation, then report the mean | fixed rank L × linear ("resolve, then average") |
+  | leave it out of the representation | represent only the mean; the fluctuation becomes modelling error (A1) | rank 1 (truncate and average) |
+  | marginalize over it | leave it out, but model its effect as correlated noise from its prior | the approximation error approach (A1) |
+
+  Experiment 1a is this case: the output was the average over τ, the decay was the part not asked for, and the rank-1 cell left it out, so it became propagated modelling error.
+
+  **Outside the cell's dimension:** the unknowns of the operator (for example coils and field) and the content of other dimensions. They are handled where dimensions and operators come together: in the combination chapter in the abstract, and in the examples.
+
+  **The template of the cell chapters (§7 of the plan):**
+
+  - **Item 2 (abstract):** which part of the representation the output does not ask for, and how the cell handles it: estimates it, leaves it out as modelling error, or marginalizes it.
+  - **Item 10 (examples):** for each example, the outputs chosen and their loss, and the other unknowns that are nuisance parameters for them (of the operator, and of other dimensions), with how the estimator handles each.
+
+  The abstract part (items 1–9) does not refer to the examples, and the outputs are still chosen at item 10.
+
+  **Also for chapter 2 (outputs):** the output axis of the grid and the handling of nuisance parameters are the same question. Each output type says which part of the representation is wanted and which is a nuisance parameter. Chapter 2 states this.
 
 ### B6. The decision log does not mark superseded rows
 
 - **Problem.** Some rows of §11 are partly superseded without a mark: "each with every element of the framework" (the outputs are no longer fixed in advance), and "adds task-based BOLD" (now "a change locked to a stimulus"). An agent that reads the log will take them as current.
 - **Proposed fix.** Mark each superseded row ("superseded by …"), and state at the top of the log that the body of the plan governs and the log is history.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** replace the decision log with a section **"Rejected choices"**, whose purpose is to stop later work, by people or agents, from returning to a choice that was considered and turned down. It is not a changelog: current decisions are stated only in the body, open decisions only in their section, and the history of changes is in git and in the PR descriptions.
+
+  **Structure.**
+
+  - Grouped by topic, not by date, so that a reader who is about to make a choice finds the earlier rejection under the same topic.
+  - Each entry has four fields:
+    - **Rejected:** the choice, stated in the words in which it is likely to be proposed again, so that it is recognized;
+    - **Instead:** what the reference does, with a link to the section of the body that states it;
+    - **Why:** the reason, in one or two sentences;
+    - **Reopen if:** what would justify reconsidering it (or "no foreseeable case").
+  - The date of the rejection, after the entry.
+  - An entry is removed only when its choice is adopted after all; the body then states it.
+  - When the lasting content of the plan moves to `docs/reference/README.md` (C5), this section moves with it.
+
+  **The first entries**, from the discussion so far (the wording is final when the plan is edited):
+
+  *Purpose and scope*
+
+  - **Rejected:** the reference serves stage (a) of the design work, or chooses the first on-scanner tests. **Instead:** a reference of theory, separate from design (Purpose). **Why:** choosing a design is design work; mixing it in ties the theory to one application. **Reopen if:** no foreseeable case.
+  - **Rejected:** the synthesis chooses a design objective. **Instead:** it stops at conditions and the table of pressures. **Why:** a unified objective needs research of its own. **Reopen if:** a later project takes up that research.
+  - **Rejected:** non-quadratic priors (sparsity, TV, the nuclear norm), learned priors, and joint low-rank fitting in scope now. **Instead:** linear estimators; these are known gaps (A2). **Why:** the project's reconstructions are linear, and the theory is cleanest there. **Reopen if:** a design or reconstruction in the project uses one of them.
+  - **Rejected:** motion, and design during the measurement, in scope. **Instead:** both are later work. **Why:** neither is needed by the results planned. **Reopen if:** a design adapts to the data, or the motion model is taken up.
+  - **Rejected:** a taxonomy of priors, or generalizing over all priors. **Instead:** each result states what it assumes about the data-generating prior (A2). **Why:** the data-generating prior is part of a problem, not of the reference. **Reopen if:** no foreseeable case.
+
+  *Framework and terms*
+
+  - **Rejected:** framing the series as ways to "collapse" a dimension. **Instead:** two questions for each dimension, representation and output (the grid). **Why:** collapsing mixes the representation with the output, and hides the choices of each.
+  - **Rejected:** dimensions of different kinds, for example "encoded" (space) against "sampled directly" (time). **Instead:** all dimensions are alike; which domain is sampled is a property of the measurement (§1). **Why:** space sampled in k and time sampled in T are the same structure on opposite sides of a Fourier transform.
+  - **Rejected:** some unknowns (for example coils, field) are nuisance parameters in advance. **Instead:** nuisance is relative to an output (§1). **Why:** the same unknown is an output in one problem and a nuisance parameter in another.
+  - **Rejected:** the names "true model" or "evaluation model", "forward model" against "fitting model", "approximate model". **Instead:** data-generating model, reconstruction model, modelling error (A1). **Why:** "true" claims too much; both models have a forward operator; "approximate" suggests that the reconstruction model's simplicity is a defect, not a choice.
+  - **Rejected:** "scheme", a bare "generator", or a "pattern-generating model". **Instead:** sampling pattern, pattern generator (A3). **Why:** a bare "generator" collides with the data-generating model and `np.random.Generator`; a pattern generator is chosen and exact, so it is not a model.
+  - **Rejected:** "force" or "preference" for what a cell asks of the sampling. **Instead:** pressure (soft) and condition (hard) (§3, A4). **Why:** "force" suggests a formal vector at a point; "preference" sounds subjective and optional.
+  - **Rejected:** the name "navigator" for the 8 mm, short-window output of the 5D example. **Instead:** fast coarse image. **Why:** "navigator" has several other meanings in MRI and in this repository.
+
+  *The grid*
+
+  - **Rejected:** cells assigned to τ or T, or "used by" the example requirements. **Instead:** cells are for an abstract dimension; whether a cell fits a dimension is a question for a problem (§2). **Why:** the reference is not tied to an application.
+  - **Rejected:** rank 1, rank L and dense as different kinds of representation. **Instead:** one family, fixed rank L, with regimes (A2). **Why:** the theory is the same, with the rank as a parameter.
+  - **Rejected:** "a representation is always a basis of some rank", with the prior folded into the representation. **Instead:** the reconstruction model is a representation, a prior and an assumed operator (A2). **Why:** sparsity and TV are priors over a representation, not representations.
+
+  *The examples*
+
+  - **Rejected:** a 1D toy. **Instead:** a 2D toy, x–t. **Why:** time is a dimension of the problem.
+  - **Rejected:** outputs fixed in advance for the examples. **Instead:** each cell chapter chooses the outputs that best illustrate it. **Why:** fixed outputs make the examples into goals.
+  - **Rejected:** effects of an application (decay over τ, R2\*, coils) in the toy. **Instead:** in the 5D example only. **Why:** the toy keeps only what illustrates a mechanism of the theory.
+  - **Rejected:** simulating the 5D example in the reference. **Instead:** described, not simulated; measurement is design work or verification. **Why:** cost, and the separation from design.
+  - **Rejected:** the details of the examples in the plan. **Instead:** a rough draft; the examples are defined in `docs/reference/examples/` (B1–B4).
+
+  *The structure of the documents*
+
+  - **Rejected:** chapters named by a mix of letters and numbers, or cells with numbers of their own. **Instead:** chapters numbered in reading order; cells named. **Why:** two numbering systems need translating in every reference.
+  - **Rejected:** one bibliography file with anchors, and the notation inside chapter 0. **Instead:** one file for each source; `notation.md` (D1). **Why:** the link check does not check anchors; parallel chapters would conflict in one file; an agent can load one source or the notation alone.
+  - **Rejected:** a results index before any results exist. **Instead:** deferred until the first chapter has results (D1). **Why:** the abstraction test (A2). **Reopen if:** the first chapter with results is written.
+  - **Rejected:** a decision log as a changelog. **Instead:** this section. **Why:** a changelog repeats the body, and agents read superseded rows as current.
+
+  **Change to the plan:** §11 (decision log) is replaced by this section; the decisions in the old log that are current are already stated in the body, or are added to it where they are not.
 
 ### B7. Small errors of wording
 
@@ -282,8 +387,8 @@ Status values: `open`, `decided`, `applied`, `dropped`.
   - §4.2: "the coil of the session": the reference has no session.
   - §2: "the projection onto a given time series" is the wording of an application.
 - **Proposed fix.** "A coil array, stated by each use"; "a given function".
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** as proposed. §4.2: "a coil array, stated by each use" (in the rough draft of the examples, B1–B4). §2: "a given function". Throughout: "design" is not used as a noun for a sampling pattern or a pattern generator (A3).
 
 ## C. Underspecified areas
 
