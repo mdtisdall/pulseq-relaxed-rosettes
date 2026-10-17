@@ -19,6 +19,7 @@ Status values: `open`, `decided`, `applied`, `dropped`.
 2. D: the linking structure decides the files that chapter 0 creates.
 3. B1–B7: wording and consistency fixes.
 4. C1–C6: additions to the open decisions of the plan.
+5. E1: the containment of the reference in its own repository (added after C6; it modifies A1, C2, C4 and D1).
 
 ## A. Gaps in the foundations of the theory
 
@@ -459,3 +460,33 @@ B1–B4 concern the details of the examples. Those details belong to the documen
   4. the fate of the existing theory documents (`docs/quadratic-norm-report.md`, and section 3 of `docs/example-requirements-design.md`).
 
   Everything decided in this review goes into the body of the plan.
+
+## E. The repository of the reference
+
+### E1. The reference lives in its own repository, and is self-contained
+
+- **Problem.** The reference will be rewritten, and will live, in a repository of its own, separate from this project. Several decisions above assume that it sits in `docs/reference/` of this project, next to the design documents it draws on.
+- **Status:** decided (2026-10-16)
+- **Decision:**
+
+  **The containment rule.** The documents of the reference (the chapters, `README.md`, `notation.md`, the examples, the sources) are self-contained in the reference's repository. Their only citations outside it are published sources. They do not link to this project's documents or code. The plan is a working document and may point into this project.
+
+  **Consequences:**
+
+  - **Paths.** The structure of D1 is the root of the new repository, not `docs/reference/`.
+  - **The 5D example is described in full inside the reference:** its sampling, its outputs, its physics. It does not point to this project's design documents. Its glossary of output names (C4) defines each name in the reference itself. A measurement from this project (for example experiment 1a) is not cited: if it matters to the reference, the reference reproduces it in its own verification, or leaves it out.
+  - **Theory from this project's documents is restated, not linked.** `docs/quadratic-norm-report.md` and section 3 of `docs/example-requirements-design.md` are unpublished, so they are not cited. Their content enters the reference stated in full, sourced to published literature where a source exists. Where none does (for example the products between independent sets, and the τ-averaging mismatch), the result is marked **new** and stated with its own argument. From the reference's side, this settles open decision 4 of C6: the reference never depends on those documents. What this project does with them afterwards is its own decision.
+  - **The code is self-contained.** The code of the toy and of verification does not import `relaxed_rosettes`. C2's "moves into the package if design work needs to reuse it" becomes "moves into the reference repository's own package". If this project wants it, this project depends on the reference, not the reverse.
+  - **The direction of citation.** This project's design documents cite the reference (by URL, at a fixed commit). The reference does not cite this project.
+  - **README and notation.** They are part of the reference, so the rejected choices that move into the README (B6, C5) are worded without links into this project.
+
+  **Changes to earlier decisions:**
+
+  - **A1:** the example of experiment 1a stays in the plan as motivation; in the reference, the propagated modelling error is shown by the examples and by the reference's own verification.
+  - **C2:** as above (the reference's own package).
+  - **C4:** the glossary defines the names in the reference, without the design documents.
+  - **C6:** open decision 4 changes to: what this project does with its theory documents once the reference holds their content (a decision for this project, not for the reference).
+  - **D1:** the structure is at the root of the new repository.
+
+  **Changes to the plan:** a containment rule in the rules (§7); the paths of §5 and §6; the open decisions (§10, from C6); and a rejected choice: "Rejected: chapters link to the project's design documents or code. Instead: the reference is self-contained, with published sources as its only external citations. Why: the reference must stand on its own, and depend on no application."
+
