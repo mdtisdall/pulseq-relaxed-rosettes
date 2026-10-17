@@ -317,6 +317,12 @@ B1–B4 concern the details of the examples. Those details belong to the documen
 
   The abstract part (items 1–9) does not refer to the examples, and the outputs are still chosen at item 10.
 
+  **Under C1** there is no fixed template, so items 2 and 10 become two items of the checklist of required content. Their order and their relation are kept, because each depends on the other:
+
+  - **The within-dimension handling comes first, and in the abstract.** It defines the options (estimate and discard, leave out as modelling error, marginalize) and what each does to the bias and the variance. It belongs to the cell, so it is stated without the examples, by the rule "abstract first, examples last".
+  - **The examples come after, and use those options.** For each example, the outputs chosen, their loss, and the nuisance parameters outside the dimension (of the operator, of other dimensions) are stated, and each nuisance parameter is handled by naming one of the options already defined. So the examples refer to the abstract part, never the reverse.
+  - **Between them, in the combination chapter,** the abstract treatment of nuisance parameters outside a dimension, which the examples also use.
+
   **Also for chapter 2 (outputs):** the output axis of the grid and the handling of nuisance parameters are the same question. Each output type says which part of the representation is wanted and which is a nuisance parameter. Chapter 2 states this.
 
 ### B6. The decision log does not mark superseded rows
@@ -396,40 +402,60 @@ B1–B4 concern the details of the examples. Those details belong to the documen
 
 - **Problem.** §7 gives a template for the cell chapters only. Chapters 0, 1 and 2, combination, and verification have none, and chapters 0–2 are written first.
 - **Proposed fix.** A template for each of these chapters, or one shared template with the items that each uses.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** no templates in the plan, including the template of the cell chapters in §7. The documents are written in sequence, and their structure is decided while writing, starting with chapter 0, and refined as the series grows.
+
+  **Instead, a checklist of required content.** Each item is something that a chapter must contain, wherever it fits. Where one item depends on another, the checklist records the order and the reason, so that the dependency is kept even without a template (as for the nuisance parameters, B5).
+
+  - the header: depends on, defines, sources (D1);
+  - for each result: its status (cited, adapted, new); what it assumes about the data-generating prior; the class of estimator it holds for (A2); whether it is a pattern result or a generator result (A3);
+  - for each pressure: the part of the error it concerns (A1), its direction and sign, and whether it concerns a sampling pattern or a pattern generator; for each condition: its kind (A4), and the same pair or generator;
+  - for a cell, in the abstract and before the examples: the part of the representation that the output does not ask for, and how the cell handles it (B5);
+  - the abstract theory never refers to the examples; the examples come after it, use the options it defines, and make no design choices;
+  - in the examples: the outputs chosen, their loss, and the nuisance parameters outside the dimension, each handled by one of the options defined in the abstract (B5).
+
+  **A template only before parallel writing.** Before the cell chapters are written at the same time (§8 of the plan), the structure of the first cell chapter can be adopted as the template for the others, so that they stay consistent. That template is based on a real chapter.
+
+  **Change to the plan:** §7's template is replaced by this checklist; §8 notes the template taken from the first cell chapter.
 
 ### C2. Code and data for the toy and for verification
 
 - **Problem.** The toy is simulated and verification runs numerical checks, but the plan does not say where the code goes (next to each chapter, as with `docs/quadratic-norm-report/`, or in the package), that it follows the project's rules on seeds and reproducibility, or where its outputs go (`data/`, not tracked).
 - **Proposed fix.** Decide the place of the code and of its outputs, and state the rules.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** code sits next to the document that uses it, as `docs/quadratic-norm-report/` does: the code of the toy in `docs/reference/examples/`, and the code of verification next to the verification chapter. It follows the project's rules: randomness from an `np.random.Generator` seeded explicitly, every parameter stated, results reproducible from them. Its outputs go to `data/` (not tracked); only the figures that a chapter shows are committed, next to it. Code moves into the package only if design work needs to reuse it.
 
 ### C3. The cost tiers come from a design document
 
 - **Problem.** The verification chapter (§6) uses the tiers of `docs/example-requirements-design.md`, section 7.3. A reference should not depend on a design document for its own method.
 - **Proposed fix.** The verification chapter defines its tiers, and cites the design document only as their origin.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** the verification chapter defines its own tiers of cost, and does not cite the design document for them. The tiers themselves (exact small problems; the real sampling patterns, reduced; full runs only to confirm a conclusion) are used as they are. Change to the plan: §6 drops the reference to `docs/example-requirements-design.md`, section 7.3.
 
 ### C4. The 5D outputs are named by reference only
 
 - **Problem.** §4.2: "outputs that the project's design documents already name keep their names" gives an agent no list.
 - **Proposed fix.** A glossary of output names in the 5D example (static image, relaxation 4D, band power, fast coarse image, and so on), each with its source document.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** deferred to the examples, like B1–B4. Drafting note for `examples/rosette-5d.md`: a glossary of the names of the outputs of the 5D example (for example the static image, relaxation 4D, band power, the fast coarse image), each with the design document that defines it.
 
 ### C5. The life of the plan
 
 - **Problem.** The plan does not say what becomes of it once chapters exist: whether it becomes the README of the series, stays as history, or is deleted.
 - **Proposed fix.** Its lasting content (conventions, reading order) moves into `docs/reference/README.md` (D1); the rest is removed when the series is set up.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** settled by D1. When the series is set up, the lasting content of the plan (the scope, the conventions, the reading order, and the rejected choices of B6) moves into `docs/reference/README.md`, and the plan is then removed.
 
 ### C6. Missing open decisions
 
 - **Problem.** §10 of the plan does not list A1–A3, C1, C2, or the linking structure (D1).
 - **Proposed fix.** Add those that are not settled here before the plan is merged.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** after this review, the open decisions of the plan are only those still open:
+
+  1. whether rank 1, or either family of the grid (fixed rank L; fitted then fixed rank K), needs a chapter of its own (A2);
+  2. estimator settings: whether regularization, the number of iterations, and the split into sets are part of an estimator, or parameters that each result states;
+  3. the details of the toy: which effects of the running example to keep, the task, the prior, and whether to show the mechanism of experiment 1a;
+  4. the fate of the existing theory documents (`docs/quadratic-norm-report.md`, and section 3 of `docs/example-requirements-design.md`).
+
+  Everything decided in this review goes into the body of the plan.
