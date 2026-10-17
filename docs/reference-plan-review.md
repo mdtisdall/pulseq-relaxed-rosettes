@@ -26,15 +26,86 @@ Status values: `open`, `decided`, `applied`, `dropped`.
 
 - **Problem.** §4.2 says that spoiling enters "as a model error of the operator", and §7 lists the local–global mismatch as a thin place, but §1–§3 never define model error. The main result of the rank-1 average (experiment 1a) is a model error: the true signal lies outside the representation. The framework (§"The framework") says that a representation "builds in a prior", but does not connect that to the expected loss.
 - **Proposed fix.** Add to §1 the distinction between the **true model** (the priors and the forward model over which the expected loss is computed) and the **estimator's assumed model** (its representation and its operator). Model error is the difference between them, in the signal or in the operator. §3 then lets a pressure or a condition concern model error as well as noise and conditioning.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** two models, and the gap between them, with these names:
+
+  - **Data-generating model:** how the data arise. The forward operator, with the priors over everything it acts on: the signal and its changes, the unknown parameters of the operator, and the noise. The expected loss is computed over it. It is the richest model that a problem states, not the truth, which is never known.
+  - **Reconstruction model:** what the estimator assumes. Its representation (a cell of the grid), its assumed operator (for example a static field map, or no spurious echoes), and any prior that its regularization builds in. "Inversion model" is the equivalent term in the inverse-problems literature; "reconstruction model" is used because the reference is about MRI reconstruction.
+  - **Modelling error:** the difference between the two models, in the signal (the part of the signal outside the representation) or in the operator (the difference between the true and the assumed operator).
+
+  Using the same model to generate synthetic data and to invert them is the **inverse crime**, a term from Colton and Kress (*Inverse Acoustic and Electromagnetic Scattering Theory*), as discussed by Wirgin (2004, arXiv:math-ph/0401050): it hides the modelling error and makes results look better than they will be on real data. The reference therefore keeps the two models separate, in the theory and in both examples.
+
+  **How the error of an estimate splits.** With data from the data-generating model, an estimator built on the reconstruction model, and an output, the error has four parts:
+
+  | part | what it is | depends on the design |
+  |---|---|---|
+  | noise | the estimator applied to the noise | yes (conditioning) |
+  | aliasing within the reconstruction model | the error that remains when the signal is in the representation and the operator is as assumed | yes (what the frame potential measures) |
+  | propagated modelling error, signal | the part of the signal outside the representation, carried into the estimate by the operator and the estimator | yes |
+  | propagated modelling error, operator | the estimator applied to the difference between the true and the assumed operator, acting on the signal | often |
+
+  The modelling error itself (for example the distance from the signal to the best estimate in the representation) does not depend on the design. How much of it propagates into the estimate does, when the sampling is incomplete. Experiment 1a is the example: the decay over τ that a rank-1 representation leaves out propagated into the average according to the mix of τ in each cell of k-space, which the frame potential could not see.
+
+  **How an estimator can handle modelling error** (the same options as for a nuisance parameter, §1 of the plan):
+
+  - ignore it, and accept its propagated part as a bias;
+  - enlarge the reconstruction model, so that the error becomes part of the representation or of the estimated operator;
+  - **marginalize over it:** treat the modelling error as an additional, correlated noise term, whose mean and covariance are estimated by sampling the prior of the data-generating model, and include it in the likelihood. This is the approximation error approach of Kaipio and Somersalo (*Statistical and Computational Inverse Problems*, Springer, 2005; and "Statistical inverse problems: discretization, model reduction and inverse crimes", *J. Comput. Appl. Math.* 198(2):493–504, 2007).
+
+  **Changes to the plan:**
+
+  - The framework: the data-generating model defines the expected loss; the reconstruction model belongs to the estimator; the sentence "a representation builds in a prior" becomes a statement about the reconstruction model.
+  - §1: the two models, modelling error, and the four parts of the error, with only the propagated parts depending on the design.
+  - §3: each pressure and each condition states which part of the error it concerns: noise, aliasing, or propagated modelling error (signal or operator).
+  - §4: each example states its data-generating model; each cell chapter states its reconstruction model for the outputs it chooses. The 5D example's spoiling and steady state become modelling error of the operator, in these terms.
+  - Bibliography: entries for Colton and Kress, Wirgin (2004), and Kaipio and Somersalo (2005, 2007), with the notation map: their "model used to generate the data" and "accurate model" to the data-generating model; their "model used for the inversion" and "approximate" or "reduced model" to the reconstruction model; their "approximation error" and "modelling error" to modelling error. Each citation is checked against its source when the entry is written: the edition and page of Colton and Kress where the term is introduced, the year of the Kaipio and Somersalo book (2004 or 2005), and the DOIs.
 
 ### A2. "It is always a basis of some rank" is false as stated
 
 - **Problem.** §2 says that a representation "is always a basis of some rank". Sparsity (compressed sensing), total variation, unions of subspaces, and learned priors are representations that are not bases of a rank. Agents will apply the grid literally.
 - **Proposed fix.** Either state the scope: the reference covers linear, low-rank representations, and lists the others as out of scope; or add a class to the representation axis for regularized or sparse representations.
-- **Status:** open
-- **Decision:**
+- **Status:** decided (2026-10-16)
+- **Decision:** the reference is about **linear estimators**, and says so in its title, its introduction, and its rules.
+
+  **The scope.** Linear estimators: estimators that are linear in the data, given their reconstruction model (A1). This includes estimators whose basis is fitted from the data first and then held fixed, as in `docs/basis-quality-test-plan.md`, where the temporal basis is estimated first so that the reconstruction is one linear solve. The fitting of the basis is then a modelling error of the reconstruction model: the basis is chosen with the data.
+
+  **Known gaps**, listed in the introduction with their main citations, to be filled when a design or reconstruction in the project uses them:
+
+  - non-quadratic priors: sparsity (Lustig, Donoho and Pauly, 2007), total variation, the nuclear norm; their sampling theory (incoherence; variable density, Puy, Vandergheynst and Wiaux, 2011; multilevel sampling, Adcock, Hansen, Poon and Roman, 2017; variable density along continuous trajectories, Chauffert, Ciuciu, Kahn and Weiss, 2014; structured acquisition, Boyer, Bigot and Weiss, 2019); and their partial tools for risk (degrees of freedom and Stein's unbiased risk estimate for the lasso and generalized lasso, Tibshirani and Taylor, 2012);
+  - learned priors;
+  - joint (alternating) fitting of a low-rank model, which gives a nonlinear estimator.
+
+  These citations are checked against their sources when the known gaps are written.
+
+  **The reconstruction model** (A1) has three parts: the representation (what is estimated), the prior over its coefficients (none or quadratic, in scope; non-quadratic, a known gap), and the assumed operator. The reference does not classify priors. A result states what it assumes about the data-generating prior (for example, a band limit) and what class of estimator it holds for.
+
+  **The representation axis of the grid** has two families:
+
+  - **fixed, rank L:** one family, with the rank as its parameter. Its regimes are set by two comparisons, L against the content of the signal (modelling error) and L against what the sampling can determine (conditioning and variance):
+
+    | regime | rank | what dominates |
+    |---|---|---|
+    | rank 1 | L = 1 | modelling error, unless the signal is constant; the coefficient and a linear output coincide |
+    | below the content | 1 < L < content | a trade between modelling error and variance |
+    | dense | L ≥ content | variance and conditioning; modelling error is negligible |
+
+    "Dense" is relative to the signal: for example, about 45 Slepian components for a band in 5000 repetitions. The largest possible rank would be no model of the dimension, which an undersampled measurement cannot determine.
+  - **fitted then fixed, rank K:** the same two comparisons, plus the effect of fitting the basis from the data.
+
+  So the grid has 2 × 3 cells (two families of representation, three outputs). This answers part of open decision 1 of the plan (the groups of cells); rank 1 stays a named special case inside the fixed family.
+
+  **Two rules**, added to §7 of the plan:
+
+  1. **Scope rule.** Results concern linear estimators, given the reconstruction model. A fitted basis is treated as fixed, and its fitting as a modelling error. A result outside the scope is not stated as a result of the reference; it goes into the known gaps.
+  2. **Abstraction test.** A concept is kept in the reference only if (a) at least one result that the reference states uses it, and (b) both examples can instantiate it. Otherwise it goes on a list of deferred extensions. (This also bears on D1: the results index can be added when the first chapter has results.)
+
+  **Changes to the plan:**
+
+  - Title: for example, "A reference of theory for sampling and reconstruction design with linear estimators: plan of a document series".
+  - Purpose: the scope sentence, the reason (it covers the reconstructions that the project uses, and the theory is cleanest there), and the known gaps.
+  - §2: "It is always a basis of some rank" is replaced by the two families above; "fitted, rank K" becomes "fitted then fixed, rank K"; the reconstruction model's prior is named, not classified.
+  - §7: the two rules. In the known thin places, the entry on nonlinear estimators for fitted representations is replaced by "the effect of fitting the basis from the same data as the reconstruction".
+  - §10: open decision 1 is reduced to whether the two families, or rank 1, need chapters of their own.
 
 ### A3. Fixed designs and random designs are not separated
 
